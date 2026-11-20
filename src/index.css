@@ -8,9 +8,9 @@ body {
 }
 
 @layer components {
-  .pa-card { @apply relative flex h-[96px] w-[124px] flex-col overflow-hidden border border-slate-400 text-[11px] leading-tight transition-opacity dark:border-slate-600; }
+  .pa-card { @apply relative flex h-[96px] w-[124px] flex-col overflow-hidden border border-slate-400 text-[11px] leading-tight transition-all duration-150 dark:border-slate-600; }
   .pa-free { @apply bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300; }
-  .pa-logged { @apply bg-green-200 text-green-950 dark:bg-green-800/70 dark:text-green-50; }
+  .pa-logged { @apply bg-emerald-200 text-emerald-950 font-semibold border-emerald-500 shadow-sm dark:bg-emerald-800/80 dark:text-emerald-50 dark:border-emerald-600; }
   .pa-break { @apply bg-amber-300 text-amber-950 dark:bg-amber-600/80 dark:text-amber-50; }
   .pa-sup { @apply bg-[#FFE699] text-yellow-950 dark:bg-yellow-700/60 dark:text-yellow-50; }
   .pa-maint { @apply bg-slate-300 text-slate-700 dark:bg-slate-700 dark:text-slate-300; background-image: repeating-linear-gradient(45deg, transparent 0 8px, rgba(0,0,0,.08) 8px 16px); }

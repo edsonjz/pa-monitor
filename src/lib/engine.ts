@@ -51,7 +51,7 @@ export function shiftEvents(s: Shift): { type: EventType; time: number }[] {
   return out;
 }
 
-const WINDOW = 20; // minutos de tolerância para disparar um evento recém-vencido
+const WINDOW = 25; // minutos de tolerância para disparar um evento recém-vencido
 
 const due = (t: number, now: number) => {
   const d = now - t;
@@ -60,7 +60,8 @@ const due = (t: number, now: number) => {
   return t >= 1440 && d2 >= 0 && d2 <= WINDOW;
 };
 
-export const alertKey = (today: string, shiftId: string, type: EventType, t: number) => `${today}|${shiftId}|${type}|${fmtMin(t)}`;
+export const alertKey = (today: string, shiftId: string, type: EventType, t: number) =>
+  `${today}|${shiftId}|${type}|${fmtMin(t)}`;
 
 export function detectAlerts(
   shifts: Shift[],
@@ -75,8 +76,34 @@ export function detectAlerts(
   for (const s of shifts) {
     const ws = wsMap.get(s.wsId);
     if (!ws || ws.status === 'maintenance') continue;
+
+    const curState = effectiveState(s, today);
+    const logoutM = toMin(s.logoutTime);
+    const loginM = toMin(s.loginTime);
+    const isPastLogout =
+      logoutM !== null &&
+      loginM !== null &&
+      (logoutM < loginM ? nowMin >= logoutM && nowMin < loginM : nowMin >= logoutM);
+
     for (const ev of shiftEvents(s)) {
-      if (!due(ev.time, nowMin)) continue;
+      let isDue = due(ev.time, nowMin);
+
+      // 1. Alerta de login pendente: se o horário de entrada já chegou/passou hoje e o operador ainda não foi confirmado como logado (e ainda não passou da saída)
+      if (ev.type === 'login' && curState === 'pending') {
+        if (loginM !== null && nowMin >= loginM && !isPastLogout) {
+          isDue = true;
+        }
+      }
+
+      // 2. Alerta de retorno de pausa pendente: se o operador está em pausa e já deu o horário de voltar (e ainda não passou da saída)
+      if ((ev.type === 'b1r' || ev.type === 'b60r' || ev.type === 'b2r') && curState === 'break') {
+        if (nowMin >= ev.time && !isPastLogout) {
+          isDue = true;
+        }
+      }
+
+      if (!isDue) continue;
+
       const id = alertKey(today, s.id, ev.type, ev.time);
       if (existing.has(id)) continue;
       existing.add(id);
@@ -115,7 +142,8 @@ export function applyAck(s: Shift, type: EventType, today: string, nowIso: strin
   }
 }
 
-export const effectiveState = (s: Shift, today: string) => (s.stateDate === today ? s.currentState : 'pending');
+export const effectiveState = (s: Shift, today: string) =>
+  s.stateDate === today ? s.currentState : 'pending';
 
 export function inWindow(s: Shift, now: number): boolean {
   const a = toMin(s.loginTime);
@@ -160,8 +188,17 @@ export function buildViews(
     let state: WsView['state'] = 'free';
     if (ws.status === 'maintenance') state = 'maint';
     else if (shift) state = effectiveState(shift, today);
-    const category: Category = state === 'maint' ? 'maint' : state === 'logged' ? 'logged' : state === 'break' ? 'break' : 'free';
-    map.set(ws.id, { ws, shift, count: list.length, state, category, alert: als[0] ?? null, alertCount: als.length });
+    const category: Category =
+      state === 'maint' ? 'maint' : state === 'logged' ? 'logged' : state === 'break' ? 'break' : 'free';
+    map.set(ws.id, {
+      ws,
+      shift,
+      count: list.length,
+      state,
+      category,
+      alert: als[0] ?? null,
+      alertCount: als.length,
+    });
   }
   return map;
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Trash2, X } from 'lucide-react';
+import { Check, Plus, Trash2, X } from 'lucide-react';
 import type { Shift, WsStatus, WsType, Workstation } from '../types';
 import { emptyShift } from '../lib/seed';
 
@@ -34,6 +34,7 @@ export default function EditModal({ ws, shifts, allWs, onClose, onSave }: Props)
   const [moveTo, setMoveTo] = useState('');
   const [err, setErr] = useState<string | null>(null);
 
+  const todayStr = new Date().toISOString().slice(0, 10);
   const patch = (id: string, p: Partial<Shift>) => setList((l) => l.map((s) => (s.id === id ? { ...s, ...p } : s)));
   const labels = ['Manhã', 'Tarde', 'Noite'];
 
@@ -84,6 +85,32 @@ export default function EditModal({ ws, shifts, allWs, onClose, onSave }: Props)
               <div><span className="label">Turno</span>
                 <input className="input" list="turnos" value={s.shiftLabel} onChange={(e) => patch(s.id, { shiftLabel: e.target.value })} />
                 <datalist id="turnos">{labels.map((l) => <option key={l} value={l} />)}</datalist></div>
+
+              <div className="col-span-2 sm:col-span-4 flex flex-wrap items-center gap-3 rounded-md bg-slate-50 p-2 dark:bg-slate-800">
+                <div className="flex-1 min-w-[200px]">
+                  <span className="label">Status do Operador</span>
+                  <select
+                    className="input font-semibold"
+                    value={s.currentState}
+                    onChange={(e) => patch(s.id, { currentState: e.target.value as Shift['currentState'], stateDate: todayStr, breakKind: e.target.value === 'break' ? (s.breakKind || 'b60') : '' })}
+                  >
+                    <option value="logged">🟢 Logado (Verde)</option>
+                    <option value="break">🟡 Em Pausa (Amarelo)</option>
+                    <option value="pending">⚪ Aguardando Login (Pendente)</option>
+                    <option value="done">⚫ Pós-Logout (Finalizado)</option>
+                  </select>
+                </div>
+                <div className="pt-4">
+                  <button
+                    type="button"
+                    onClick={() => patch(s.id, { currentState: 'logged', breakKind: '', stateDate: todayStr })}
+                    className="flex items-center gap-1 rounded bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
+                  >
+                    <Check size={14} strokeWidth={3} /> Dar OK (Marcar Logado)
+                  </button>
+                </div>
+              </div>
+
               {TIME_FIELDS.map((f) => (
                 <div key={f.key}>
                   <span className="label">{f.label}</span>
@@ -96,7 +123,7 @@ export default function EditModal({ ws, shifts, allWs, onClose, onSave }: Props)
               <div className="col-span-2 sm:col-span-4"><span className="label">Observações</span><input className="input" value={s.notes} onChange={(e) => patch(s.id, { notes: e.target.value })} /></div>
             </div>
             <div className="mt-2 text-right">
-              <button className="inline-flex items-center gap-1 text-xs font-semibold text-red-600" onClick={() => setList((l) => l.filter((x) => x.id !== s.id))}>
+              <button className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700" onClick={() => setList((l) => l.filter((x) => x.id !== s.id))}>
                 <Trash2 size={14} /> Excluir operador
               </button>
             </div>
