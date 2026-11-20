@@ -12,8 +12,18 @@ export interface Workstation {
   updatedAt: string;
 }
 
-export type ShiftState = 'pending' | 'logged' | 'break' | 'done' | 'falta' | 'atestado' | 'dsr';
-export type AbsenceKind = 'falta' | 'atestado' | 'dsr';
+export type IncidentState = 'no_internet' | 'no_power' | 'tech_issue';
+export type ShiftState =
+  | 'pending'
+  | 'logged'
+  | 'break'
+  | 'done'
+  | 'falta'
+  | 'atestado'
+  | 'dsr'
+  | 'ferias'
+  | IncidentState;
+export type AbsenceKind = 'falta' | 'atestado' | 'dsr' | 'ferias';
 export type BreakKind = '' | 'b1' | 'b60' | 'b2';
 
 export interface Shift {
@@ -31,10 +41,23 @@ export interface Shift {
   currentState: ShiftState;
   breakKind: BreakKind;
   stateDate: string;
+  incidentTime: string;
   updatedAt: string;
 }
 
-export type EventType = 'login' | 'b1s' | 'b1r' | 'b60s' | 'b60r' | 'b2s' | 'b2r' | 'logout';
+export type EventType =
+  | 'login'
+  | 'b1s'
+  | 'b1r'
+  | 'b60s'
+  | 'b60r'
+  | 'b2s'
+  | 'b2r'
+  | 'logout'
+  | 'no_internet'
+  | 'no_power'
+  | 'tech_issue'
+  | 'incident_resolved';
 
 export interface AlertLog {
   id: string;

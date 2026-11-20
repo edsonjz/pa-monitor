@@ -1,4 +1,4 @@
-import type { AlertLog, BreakKind, EventType, Shift, Workstation } from '../types';
+import type { AlertLog, BreakKind, EventType, IncidentState, Shift, ShiftState, Workstation } from '../types';
 import { fmtMin, toMin } from './time';
 
 export const EVENT_LABEL: Record<EventType, string> = {
@@ -10,7 +10,20 @@ export const EVENT_LABEL: Record<EventType, string> = {
   b2s: 'INÍCIO PAUSA 10 (2)',
   b2r: 'RETORNO PAUSA 10 (2)',
   logout: 'HORA DE LOGOUT',
+  no_internet: 'OCORRÊNCIA: SEM INTERNET',
+  no_power: 'OCORRÊNCIA: SEM ENERGIA',
+  tech_issue: 'OCORRÊNCIA: PROBLEMA TÉCNICO (TI)',
+  incident_resolved: 'RETORNO DE OCORRÊNCIA',
 };
+
+export const INCIDENT_LABEL: Record<IncidentState, string> = {
+  no_internet: 'Sem Internet',
+  no_power: 'Sem Energia',
+  tech_issue: 'Problema Técnico (TI)',
+};
+
+export const isIncidentState = (state: string): state is IncidentState =>
+  state === 'no_internet' || state === 'no_power' || state === 'tech_issue';
 
 export const BREAK_LABEL: Record<Exclude<BreakKind, ''>, string> = {
   b1: 'Pausa 10 (1)',
@@ -78,8 +91,14 @@ export function detectAlerts(
     if (!ws || ws.status === 'maintenance') continue;
 
     const curState = effectiveState(s, today);
-    // Operadores em Falta, Atestado ou DSR não geram alertas operacionais
-    if (curState === 'falta' || curState === 'atestado' || curState === 'dsr') {
+    // Operadores em ausência ou ocorrência remota não geram alertas de login/pausa/logout
+    if (
+      curState === 'falta' ||
+      curState === 'atestado' ||
+      curState === 'dsr' ||
+      curState === 'ferias' ||
+      isIncidentState(curState)
+    ) {
       continue;
     }
     const logoutM = toMin(s.logoutTime);
@@ -93,23 +112,19 @@ export function detectAlerts(
       let isDue = false;
 
       if (ev.type === 'login') {
-        // Só dispara login se estiver pendente e dentro da janela de trabalho (ou após o login se não houver saída)
         if (curState === 'pending' && !isPastLogout) {
           isDue = logoutM !== null ? inWindow(s, nowMin) : loginM !== null && nowMin >= loginM;
         }
       } else if (ev.type === 'b1s' || ev.type === 'b60s' || ev.type === 'b2s') {
-        // Início de pausa só dispara se o operador estiver logado e dentro da tolerância
         if (curState === 'logged') {
           isDue = due(ev.time, nowMin);
         }
       } else if (ev.type === 'b1r' || ev.type === 'b60r' || ev.type === 'b2r') {
-        // Retorno de pausa só dispara se o operador estiver em pausa e já deu o horário de voltar
         if (curState === 'break' && !isPastLogout) {
           const evReached = nowMin >= ev.time || (ev.time >= 1440 && nowMin + 1440 >= ev.time);
           if (evReached) isDue = true;
         }
       } else if (ev.type === 'logout') {
-        // Logout só dispara se estiver logado ou em pausa e dentro da tolerância
         if (curState === 'logged' || curState === 'break') {
           isDue = due(ev.time, nowMin);
         }
@@ -143,7 +158,8 @@ export function applyAck(s: Shift, type: EventType, today: string, nowIso: strin
     case 'b1r':
     case 'b60r':
     case 'b2r':
-      return { ...base, currentState: 'logged', breakKind: '' };
+    case 'incident_resolved':
+      return { ...base, currentState: 'logged', breakKind: '', incidentTime: '' };
     case 'b1s':
       return { ...base, currentState: 'break', breakKind: 'b1' };
     case 'b60s':
@@ -152,10 +168,14 @@ export function applyAck(s: Shift, type: EventType, today: string, nowIso: strin
       return { ...base, currentState: 'break', breakKind: 'b2' };
     case 'logout':
       return { ...base, currentState: 'done', breakKind: '' };
+    case 'no_internet':
+    case 'no_power':
+    case 'tech_issue':
+      return { ...base, currentState: type, breakKind: '' };
   }
 }
 
-export const effectiveState = (s: Shift, today: string) =>
+export const effectiveState = (s: Shift, today: string): ShiftState =>
   s.stateDate === today ? s.currentState : 'pending';
 
 export function inWindow(s: Shift, now: number): boolean {
@@ -166,17 +186,38 @@ export function inWindow(s: Shift, now: number): boolean {
   return (now >= a && now < b) || (now + 1440 >= a && now + 1440 < b);
 }
 
-export type Category = 'free' | 'logged' | 'break' | 'maint' | 'falta' | 'atestado' | 'dsr';
+export type Category =
+  | 'free'
+  | 'logged'
+  | 'break'
+  | 'maint'
+  | 'falta'
+  | 'atestado'
+  | 'dsr'
+  | 'ferias'
+  | 'incident';
 
 export interface WsView {
   ws: Workstation;
   shift: Shift | null;
   count: number;
-  state: 'free' | 'pending' | 'logged' | 'break' | 'done' | 'maint' | 'falta' | 'atestado' | 'dsr';
+  state: 'free' | 'pending' | ShiftState | 'maint';
   category: Category;
   alert: AlertLog | null;
   alertCount: number;
 }
+
+const ACTIVE_STATES: ShiftState[] = [
+  'logged',
+  'break',
+  'falta',
+  'atestado',
+  'dsr',
+  'ferias',
+  'no_internet',
+  'no_power',
+  'tech_issue',
+];
 
 export function buildViews(
   wss: Workstation[],
@@ -196,7 +237,7 @@ export function buildViews(
     let shift: Shift | null = null;
     if (als.length) shift = list.find((s) => s.id === als[0].shiftId) ?? null;
     if (!shift) shift = list.find((s) => inWindow(s, now)) ?? null;
-    if (!shift) shift = list.find((s) => ['logged', 'break', 'falta', 'atestado', 'dsr'].includes(effectiveState(s, today))) ?? null;
+    if (!shift) shift = list.find((s) => ACTIVE_STATES.includes(effectiveState(s, today))) ?? null;
     if (!shift) shift = list[0] ?? null;
     let state: WsView['state'] = 'free';
     if (ws.status === 'maintenance') state = 'maint';
@@ -214,6 +255,10 @@ export function buildViews(
         ? 'atestado'
         : state === 'dsr'
         ? 'dsr'
+        : state === 'ferias'
+        ? 'ferias'
+        : isIncidentState(state)
+        ? 'incident'
         : 'free';
     map.set(ws.id, {
       ws,

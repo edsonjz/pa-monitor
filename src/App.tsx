@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Building2,
   Check,
   Clock,
   Download,
   FastForward,
   FileSpreadsheet,
+  Home,
+  LayoutGrid,
   LogOut,
   Moon,
   Play,
@@ -18,27 +21,41 @@ import {
   VolumeX,
   Wifi,
   WifiOff,
+  X,
 } from 'lucide-react';
 import type { AlertLog, Shift, Snapshot, Workstation } from './types';
 import { useStore } from './hooks/useStore';
 import { useClock } from './hooks/useClock';
-import { applyAck, buildViews, detectAlerts, effectiveState, inWindow } from './lib/engine';
+import { applyAck, buildViews, detectAlerts, effectiveState, inWindow, isIncidentState } from './lib/engine';
 import { fmtClock, minOfDay, todayStr } from './lib/time';
 import { beep } from './lib/sound';
 import { downloadTemplate, exportCurrent, parseImport } from './lib/excel';
-import { defaultWorkstations } from './lib/layout';
+import { defaultWorkstations, hoNumber, isHomeOfficeWs, makeHomeOfficeWs } from './lib/layout';
 import { storageMode, syncLocalToSupabase } from './services/storageService';
 import { isAuthenticated, logout } from './services/authService';
 import FloorMap from './components/FloorMap';
+import HomeOfficeGrid from './components/HomeOfficeGrid';
 import PACard from './components/PACard';
 import EditModal from './components/EditModal';
 import AlertPanel from './components/AlertPanel';
 import SettingsModal from './components/SettingsModal';
 import LoginScreen from './components/LoginScreen';
 
-type StatusFilter = 'all' | 'alert' | 'logged' | 'break' | 'falta' | 'atestado' | 'dsr' | 'free';
+type ViewTab = 'presencial' | 'ho' | 'all';
+type StatusFilter =
+  | 'all'
+  | 'alert'
+  | 'logged'
+  | 'break'
+  | 'incident'
+  | 'falta'
+  | 'atestado'
+  | 'dsr'
+  | 'ferias'
+  | 'maint'
+  | 'free';
 
-/** Troca de lugar (ou move) todos os turnos entre duas PAs. */
+/** Troca de lugar (ou move) todos os turnos entre duas PAs (incluindo Presencial <-> Home Office). */
 function swapWs(s: Snapshot, a: string, b: string): Snapshot {
   const wb = s.workstations.find((w) => w.id === b);
   const wa = s.workstations.find((w) => w.id === a);
@@ -68,6 +85,7 @@ export default function App() {
   const nowRef = useRef(now);
   nowRef.current = now;
 
+  const [tab, setTab] = useState<ViewTab>('presencial');
   const [dark, setDark] = useState(() => localStorage.getItem('pa-dark') === '1');
   const [soundOn, setSoundOn] = useState(true);
   const [search, setSearch] = useState('');
@@ -135,22 +153,62 @@ export default function App() {
     [snap, pending, nowMin, today],
   );
 
+  const hoWorkstations = useMemo(
+    () =>
+      (snap?.workstations ?? [])
+        .filter((w) => isHomeOfficeWs(w))
+        .sort((a, b) => hoNumber(a.id) - hoNumber(b.id)),
+    [snap],
+  );
+
+  const occupiedWsIds = useMemo(
+    () => new Set((snap?.shifts ?? []).filter((s) => s.operatorName.trim()).map((s) => s.wsId)),
+    [snap],
+  );
+
   const teams = useMemo(
     () => [...new Set((snap?.shifts ?? []).map((s) => s.team.trim()).filter(Boolean))].sort(),
     [snap],
   );
 
-  const kpi = useMemo(() => {
-    const v = [...views.values()];
-    return {
-      total: v.length,
-      logged: v.filter((x) => x.category === 'logged').length,
-      brk: v.filter((x) => x.category === 'break').length,
-      falta: v.filter((x) => x.category === 'falta').length,
-      atestado: v.filter((x) => x.category === 'atestado').length,
-      dsr: v.filter((x) => x.category === 'dsr').length,
-      free: v.filter((x) => x.category === 'free').length,
+  // Alerta cruzado entre abas (Presencial vs Home Office)
+  const pendingPresencial = useMemo(
+    () => pending.filter((a) => !a.wsId.startsWith('HO-') && !a.wsCode.toUpperCase().startsWith('HO-')).length,
+    [pending],
+  );
+  const pendingHO = useMemo(
+    () => pending.filter((a) => a.wsId.startsWith('HO-') || a.wsCode.toUpperCase().startsWith('HO-')).length,
+    [pending],
+  );
+
+  // Resumo rápido por status com quebra Presencial vs Home Office
+  const summary = useMemo(() => {
+    const empty = () => ({ total: 0, pres: 0, ho: 0 });
+    const stats = {
+      all: empty(),
+      logged: empty(),
+      break: empty(),
+      alert: empty(),
+      incident: empty(),
+      falta: empty(),
+      atestado: empty(),
+      dsr: empty(),
+      ferias: empty(),
+      maint: empty(),
+      free: empty(),
     };
+    const bump = (bucket: { total: number; pres: number; ho: number }, ho: boolean) => {
+      bucket.total += 1;
+      if (ho) bucket.ho += 1;
+      else bucket.pres += 1;
+    };
+    for (const v of views.values()) {
+      const ho = isHomeOfficeWs(v.ws);
+      bump(stats.all, ho);
+      if (v.alert) bump(stats.alert, ho);
+      bump(stats[v.category], ho);
+    }
+    return stats;
   }, [views]);
 
   const flash = (m: string) => {
@@ -176,12 +234,12 @@ export default function App() {
     if (!pending.length) return;
     update((s) => {
       const iso = nowRef.current.toISOString();
-      const today = todayStr(nowRef.current);
+      const dStr = todayStr(nowRef.current);
       let shifts = [...s.shifts];
       const pendingList = s.alerts.filter((a) => !a.acknowledgedAt);
 
       pendingList.forEach((a) => {
-        shifts = shifts.map((sh) => (sh.id === a.shiftId ? applyAck(sh, a.eventType, today, iso) : sh));
+        shifts = shifts.map((sh) => (sh.id === a.shiftId ? applyAck(sh, a.eventType, dStr, iso) : sh));
       });
 
       return {
@@ -193,24 +251,48 @@ export default function App() {
     flash(`Todos os ${pending.length} alerta(s) foram confirmados.`);
   };
 
-  // Botão de ação rápida "Dar OK" direto na PA (marca operador como Logado/Verde)
+  // Botão de ação rápida "OK" direto na PA (confirma presença ou normaliza ocorrência remota)
   const quickLog = (shiftId: string) => {
+    let wasIncident = false;
     update((s) => {
       const iso = nowRef.current.toISOString();
-      const today = todayStr(nowRef.current);
+      const dStr = todayStr(nowRef.current);
+      const hhmm = fmtClock(nowRef.current).slice(0, 5);
+      const target = s.shifts.find((sh) => sh.id === shiftId);
+      wasIncident = !!target && isIncidentState(target.currentState);
+      const targetWs = target ? s.workstations.find((w) => w.id === target.wsId) : undefined;
+      const extraLogs: AlertLog[] =
+        wasIncident && target
+          ? [
+              {
+                id: `${dStr}|${target.id}|incident_resolved|${Date.now().toString(36)}`,
+                shiftId: target.id,
+                wsId: target.wsId,
+                wsCode: targetWs?.code ?? target.wsId,
+                operatorName: target.operatorName,
+                eventType: 'incident_resolved',
+                scheduledTime: hhmm,
+                acknowledgedAt: iso,
+                createdAt: iso,
+              },
+            ]
+          : [];
       return {
         ...s,
         shifts: s.shifts.map((sh) =>
           sh.id === shiftId
-            ? { ...sh, currentState: 'logged', breakKind: '', stateDate: today, updatedAt: iso }
+            ? { ...sh, currentState: 'logged', breakKind: '', stateDate: dStr, incidentTime: '', updatedAt: iso }
             : sh,
         ),
-        alerts: s.alerts.map((al) =>
-          al.shiftId === shiftId && !al.acknowledgedAt ? { ...al, acknowledgedAt: iso } : al,
-        ),
+        alerts: [
+          ...s.alerts.map((al) =>
+            al.shiftId === shiftId && !al.acknowledgedAt ? { ...al, acknowledgedAt: iso } : al,
+          ),
+          ...extraLogs,
+        ],
       };
     });
-    flash('Operador confirmado como Logado (Verde).');
+    flash(wasIncident ? 'Ocorrência normalizada · Operador Logado (Verde).' : 'Operador confirmado como Logado (Verde).');
   };
 
   // Operadores que estão no horário de trabalho mas ainda não estão com status "logado"
@@ -218,7 +300,8 @@ export default function App() {
     return (snap?.shifts ?? []).filter((s) => {
       if (!s.operatorName.trim()) return false;
       const st = effectiveState(s, today);
-      if (st === 'logged' || st === 'falta' || st === 'atestado' || st === 'dsr') return false;
+      if (st === 'logged' || st === 'falta' || st === 'atestado' || st === 'dsr' || st === 'ferias' || isIncidentState(st))
+        return false;
       return inWindow(s, nowMin);
     });
   }, [snap, today, nowMin]);
@@ -229,13 +312,13 @@ export default function App() {
     const count = scheduledToLog.length;
     update((s) => {
       const iso = nowRef.current.toISOString();
-      const today = todayStr(nowRef.current);
+      const dStr = todayStr(nowRef.current);
       const targetIds = new Set(scheduledToLog.map((x) => x.id));
       return {
         ...s,
         shifts: s.shifts.map((sh) =>
           targetIds.has(sh.id)
-            ? { ...sh, currentState: 'logged', breakKind: '', stateDate: today, updatedAt: iso }
+            ? { ...sh, currentState: 'logged', breakKind: '', stateDate: dStr, incidentTime: '', updatedAt: iso }
             : sh,
         ),
         alerts: s.alerts.map((al) =>
@@ -246,10 +329,30 @@ export default function App() {
     flash(`${count} operador(es) do horário confirmados como Logados (Verde).`);
   };
 
+  // Localizar inteligente: muda automaticamente para a aba certa (Presencial ou Home Office) e destaca o card
   const locate = (wsId: string) => {
+    const targetWs = ref.current?.workstations.find((w) => w.id === wsId);
+    const targetIsHO = targetWs ? isHomeOfficeWs(targetWs) : wsId.startsWith('HO-');
+    if (targetIsHO && tab === 'presencial') setTab('ho');
+    else if (!targetIsHO && tab === 'ho') setTab('presencial');
+
     setHighlight(wsId);
-    document.getElementById(`pa-${wsId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    setTimeout(() => {
+      document.getElementById(`pa-${wsId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    }, 80);
     setTimeout(() => setHighlight(null), 3500);
+  };
+
+  // Adicionar nova posição dinâmica no Home Office
+  const addHomeOfficeSlot = () => {
+    update((s) => {
+      const maxNum = s.workstations
+        .filter((w) => isHomeOfficeWs(w))
+        .reduce((m, w) => Math.max(m, hoNumber(w.id)), 0);
+      const nextWs = makeHomeOfficeWs(maxNum + 1);
+      return { ...s, workstations: [...s.workstations, nextWs] };
+    });
+    flash('Nova posição Home Office adicionada.');
   };
 
   const saveWs = (ws: Workstation, list: Shift[], removed: string[], moveTo: string): string | null => {
@@ -257,30 +360,81 @@ export default function App() {
     const s0 = ref.current!;
     if (s0.workstations.some((w) => w.id !== ws.id && w.code.toLowerCase() === ws.code.toLowerCase()))
       return `O código "${ws.code}" já existe em outra PA.`;
+
+    let movedMsg = '';
     update((s) => {
-      const iso = new Date().toISOString();
+      const iso = nowRef.current.toISOString();
+      const dStr = todayStr(nowRef.current);
+      const hhmm = fmtClock(nowRef.current).slice(0, 5);
       const kept = s.shifts.filter((x) => !removed.includes(x.id) && !list.some((l) => l.id === x.id));
       const clearedShiftIds = new Set(
         list
-          .filter((l) => ['logged', 'falta', 'atestado', 'dsr', 'done'].includes(l.currentState))
+          .filter((l) =>
+            ['logged', 'falta', 'atestado', 'dsr', 'ferias', 'done', 'no_internet', 'no_power', 'tech_issue'].includes(
+              l.currentState,
+            ),
+          )
           .map((l) => l.id),
       );
+
+      // Registrar ocorrências remotas e retornos de ocorrências no histórico
+      const incidentLogs: AlertLog[] = [];
+      list.forEach((l, idx) => {
+        const prev = s.shifts.find((x) => x.id === l.id);
+        if (
+          isIncidentState(l.currentState) &&
+          (!prev || prev.currentState !== l.currentState || prev.incidentTime !== l.incidentTime)
+        ) {
+          incidentLogs.push({
+            id: `${dStr}|${l.id}|${l.currentState}|${Date.now().toString(36)}${idx}`,
+            shiftId: l.id,
+            wsId: ws.id,
+            wsCode: ws.code,
+            operatorName: l.operatorName,
+            eventType: l.currentState,
+            scheduledTime: l.incidentTime || hhmm,
+            acknowledgedAt: iso,
+            createdAt: iso,
+          });
+        } else if (prev && isIncidentState(prev.currentState) && l.currentState === 'logged') {
+          incidentLogs.push({
+            id: `${dStr}|${l.id}|incident_resolved|${Date.now().toString(36)}${idx}`,
+            shiftId: l.id,
+            wsId: ws.id,
+            wsCode: ws.code,
+            operatorName: l.operatorName,
+            eventType: 'incident_resolved',
+            scheduledTime: hhmm,
+            acknowledgedAt: iso,
+            createdAt: iso,
+          });
+        }
+      });
+
       let next: Snapshot = {
         ...s,
         workstations: s.workstations.map((w) => (w.id === ws.id ? { ...ws, label: ws.code } : w)),
         shifts: [...kept, ...list.map((l) => ({ ...l, wsId: ws.id, updatedAt: iso }))],
-        alerts: s.alerts.map((a) => {
-          if (a.acknowledgedAt) return a;
-          if (clearedShiftIds.has(a.shiftId)) {
-            return { ...a, wsCode: ws.code, acknowledgedAt: iso };
-          }
-          return a.wsId === ws.id ? { ...a, wsCode: ws.code } : a;
-        }),
+        alerts: [
+          ...s.alerts.map((a) => {
+            if (a.acknowledgedAt) return a;
+            if (clearedShiftIds.has(a.shiftId)) {
+              return { ...a, wsCode: ws.code, acknowledgedAt: iso };
+            }
+            return a.wsId === ws.id ? { ...a, wsCode: ws.code } : a;
+          }),
+          ...incidentLogs,
+        ],
       };
-      if (moveTo) next = swapWs(next, ws.id, moveTo);
+      if (moveTo) {
+        const dest = s.workstations.find((w) => w.id === moveTo);
+        next = swapWs(next, ws.id, moveTo);
+        if (dest) movedMsg = `Operador transferido de ${ws.code} para ${dest.code}.`;
+      }
       return next;
     });
     setEditId(null);
+    if (movedMsg) flash(movedMsg);
     return null;
   };
 
@@ -289,11 +443,19 @@ export default function App() {
       const r = await parseImport(f, ref.current!.workstations);
       if (
         !window.confirm(
-          `Importar ${r.shifts.length} operador(es) em ${r.affectedWs.size} PA(s)?\nOs turnos atuais dessas PAs serão substituídos.`,
+          `Importar ${r.shifts.length} operador(es) em ${r.affectedWs.size} posição(ões)?\nOs turnos atuais dessas posições serão substituídos.`,
         )
       )
         return;
-      update((s) => ({ ...s, shifts: [...s.shifts.filter((x) => !r.affectedWs.has(x.wsId)), ...r.shifts] }));
+      update((s) => {
+        const existingIds = new Set(s.workstations.map((w) => w.id));
+        const addedWs = r.newWorkstations.filter((w) => !existingIds.has(w.id));
+        return {
+          ...s,
+          workstations: [...s.workstations, ...addedWs],
+          shifts: [...s.shifts.filter((x) => !r.affectedWs.has(x.wsId)), ...r.shifts],
+        };
+      });
       flash(
         `Importação concluída: ${r.shifts.length} turno(s).${r.warnings.length ? ' Avisos: ' + r.warnings.slice(0, 3).join(' ') : ''}`,
       );
@@ -314,9 +476,12 @@ export default function App() {
     if (statusF === 'alert' && !v.alert) return false;
     if (statusF === 'logged' && v.category !== 'logged') return false;
     if (statusF === 'break' && v.category !== 'break') return false;
+    if (statusF === 'incident' && v.category !== 'incident') return false;
     if (statusF === 'falta' && v.category !== 'falta') return false;
     if (statusF === 'atestado' && v.category !== 'atestado') return false;
     if (statusF === 'dsr' && v.category !== 'dsr') return false;
+    if (statusF === 'ferias' && v.category !== 'ferias') return false;
+    if (statusF === 'maint' && v.category !== 'maint') return false;
     if (statusF === 'free' && v.category !== 'free') return false;
     return true;
   };
@@ -349,14 +514,93 @@ export default function App() {
   const editWs = snap.workstations.find((w) => w.id === editId);
   const online = storageMode === 'supabase';
 
+  const summaryCards: {
+    key: StatusFilter;
+    label: string;
+    stat: { total: number; pres: number; ho: number };
+    cls: string;
+    valCls: string;
+  }[] = [
+    { key: 'all', label: 'Todos', stat: summary.all, cls: 'bg-slate-100 border-slate-300 dark:bg-slate-800 dark:border-slate-700', valCls: 'text-slate-800 dark:text-slate-100' },
+    { key: 'logged', label: 'Logados', stat: summary.logged, cls: 'bg-[#C6EFCE]/60 border-emerald-400 dark:bg-emerald-950/60 dark:border-emerald-700', valCls: 'text-emerald-800 dark:text-emerald-300' },
+    { key: 'break', label: 'Em Pausa', stat: summary.break, cls: 'bg-[#FFEB9C]/60 border-amber-400 dark:bg-amber-950/60 dark:border-amber-700', valCls: 'text-amber-800 dark:text-amber-300' },
+    { key: 'alert', label: 'Em Alerta', stat: summary.alert, cls: summary.alert.total > 0 ? 'animate-pulse bg-red-100 border-red-500 dark:bg-red-950/80 dark:border-red-600' : 'bg-slate-100 border-slate-300 dark:bg-slate-800 dark:border-slate-700', valCls: summary.alert.total > 0 ? 'text-red-600 dark:text-red-300' : 'text-slate-500' },
+    { key: 'incident', label: 'Ocorrências HO', stat: summary.incident, cls: summary.incident.total > 0 ? 'bg-orange-100 border-orange-500 dark:bg-orange-950/70 dark:border-orange-600' : 'bg-orange-50/50 border-orange-200 dark:bg-slate-800 dark:border-slate-700', valCls: summary.incident.total > 0 ? 'text-orange-700 dark:text-orange-300' : 'text-slate-500' },
+    { key: 'atestado', label: 'Atestado', stat: summary.atestado, cls: 'bg-[#B7DEE8]/60 border-cyan-400 dark:bg-cyan-950/50 dark:border-cyan-700', valCls: 'text-cyan-800 dark:text-cyan-300' },
+    { key: 'dsr', label: 'DSR', stat: summary.dsr, cls: 'bg-[#E4DFEC]/70 border-purple-400 dark:bg-purple-950/50 dark:border-purple-700', valCls: 'text-purple-800 dark:text-purple-300' },
+    { key: 'falta', label: 'Faltas', stat: summary.falta, cls: 'bg-[#FFC7CE]/60 border-rose-400 dark:bg-rose-950/50 dark:border-rose-700', valCls: 'text-rose-700 dark:text-rose-300' },
+    { key: 'ferias', label: 'Férias', stat: summary.ferias, cls: 'bg-[#E0E7FF]/70 border-indigo-400 dark:bg-indigo-950/50 dark:border-indigo-700', valCls: 'text-indigo-700 dark:text-indigo-300' },
+    { key: 'maint', label: 'Manutenção', stat: summary.maint, cls: 'bg-slate-200/80 border-slate-400 dark:bg-slate-800 dark:border-slate-600', valCls: 'text-slate-700 dark:text-slate-300' },
+    { key: 'free', label: 'Livres', stat: summary.free, cls: 'bg-[#F2F2F2] border-slate-300 dark:bg-slate-800 dark:border-slate-700', valCls: 'text-slate-600 dark:text-slate-300' },
+  ];
+
+  const blinkHO = tab === 'presencial' && pendingHO > 0;
+  const blinkPresencial = tab === 'ho' && pendingPresencial > 0;
+
   return (
     <div className="flex h-screen flex-col">
-      {/* CABEÇALHO */}
+      {/* CABEÇALHO + NAVEGAÇÃO POR ABAS */}
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 bg-navy px-4 py-2 text-white">
         <div>
-          <h1 className="text-base font-bold leading-tight">Monitor de PAs — Layout da Operação</h1>
-          <p className="text-[11px] text-sky-200">62 PAs · 58 operadores + 4 supervisores</p>
+          <h1 className="text-base font-bold leading-tight">Monitor de PAs — Operação Híbrida</h1>
+          <p className="text-[11px] text-sky-200">
+            62 PAs presenciais · {hoWorkstations.length} posições Home Office
+          </p>
         </div>
+
+        {/* ABAS DE NAVEGAÇÃO COM ALERTA CRUZADO */}
+        <nav className="flex items-center gap-1 rounded-lg bg-black/25 p-1">
+          <button
+            onClick={() => setTab('presencial')}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-bold transition ${
+              blinkPresencial
+                ? 'animate-alertBlink bg-red-600 text-white shadow'
+                : tab === 'presencial'
+                  ? 'bg-white text-navy shadow'
+                  : 'text-sky-100 hover:bg-white/10'
+            }`}
+          >
+            <Building2 size={14} /> Presencial
+            {pendingPresencial > 0 && (
+              <span className="rounded-full bg-red-600 px-1.5 py-0.2 text-[10px] font-black text-white ring-1 ring-white">
+                {pendingPresencial}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setTab('ho')}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-bold transition ${
+              blinkHO
+                ? 'animate-alertBlink bg-red-600 text-white shadow'
+                : tab === 'ho'
+                  ? 'bg-indigo-500 text-white shadow'
+                  : 'text-sky-100 hover:bg-white/10'
+            }`}
+          >
+            <Home size={14} /> Home Office
+            {pendingHO > 0 && (
+              <span className="rounded-full bg-red-600 px-1.5 py-0.2 text-[10px] font-black text-white ring-1 ring-white">
+                {pendingHO}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setTab('all')}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-bold transition ${
+              tab === 'all' ? 'bg-sky-400 text-slate-950 shadow' : 'text-sky-100 hover:bg-white/10'
+            }`}
+          >
+            <LayoutGrid size={14} /> Todos
+            {pending.length > 0 && tab !== 'all' && (
+              <span className="rounded-full bg-white/20 px-1.5 py-0.2 text-[10px] font-bold">
+                {pending.length}
+              </span>
+            )}
+          </button>
+        </nav>
+
         <div className={`flex items-center gap-2 rounded-lg px-3 py-1 ${clock.simOn ? 'bg-fuchsia-600' : 'bg-black/30'}`}>
           <Clock size={18} />
           <span className="font-mono text-2xl font-bold tabular-nums">{fmtClock(now)}</span>
@@ -426,11 +670,7 @@ export default function App() {
           <button className="btn" onClick={() => exportCurrent(snap.workstations, snap.shifts)}>
             <Download size={14} /> Exportar Escala (.xlsx)
           </button>
-          <button
-            className="btn"
-            onClick={() => setSoundOn((v) => !v)}
-            title="Som dos alertas"
-          >
+          <button className="btn" onClick={() => setSoundOn((v) => !v)} title="Som dos alertas">
             {soundOn ? <Volume2 size={14} /> : <VolumeX size={14} />} {soundOn ? 'Som ON' : 'Mudo'}
           </button>
           <button className="btn" onClick={() => setDark((v) => !v)}>
@@ -459,29 +699,47 @@ export default function App() {
         </div>
       </header>
 
-      {/* KPIs + BOTAO DE CONFIRMAR TODOS LOGADOS */}
-      <div className="flex flex-wrap items-center gap-2.5 border-b border-slate-300 bg-white px-4 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-        <Kpi label="Total PAs" value={kpi.total} />
-        <Kpi label="Logados" value={kpi.logged} cls="text-emerald-600 font-black" />
-        <Kpi label="Em pausa" value={kpi.brk} cls="text-amber-600 font-black" />
-        <Kpi label="Faltas" value={kpi.falta} cls={kpi.falta > 0 ? 'text-rose-600 font-black' : ''} />
-        <Kpi label="Atestados" value={kpi.atestado} cls={kpi.atestado > 0 ? 'text-cyan-700 font-black' : ''} />
-        <Kpi label="DSR" value={kpi.dsr} cls={kpi.dsr > 0 ? 'text-purple-700 font-black' : ''} />
-        <Kpi label="Livres" value={kpi.free} />
-        <Kpi
-          label="Alertas pendentes"
-          value={pending.length}
-          cls={pending.length > 0 ? 'text-red-600 font-black' : ''}
-          box={pending.length > 0}
-        />
+      {/* PAINEL DE RESUMO RÁPIDO CLICÁVEL (PRESENCIAL + HOME OFFICE) */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-white px-4 py-2 dark:border-slate-700 dark:bg-slate-900">
+        {summaryCards.map((c) => {
+          const active = statusF === c.key;
+          return (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => setStatusF(active ? 'all' : c.key)}
+              title={`Filtrar por ${c.label}`}
+              className={`flex flex-col items-start rounded-lg border px-2.5 py-1 text-left transition hover:shadow-sm active:scale-[0.98] ${c.cls} ${
+                active ? 'ring-2 ring-navy ring-offset-1 dark:ring-sky-400' : ''
+              }`}
+            >
+              <div className="flex w-full items-baseline justify-between gap-2">
+                <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">{c.label}</span>
+                <span className={`text-base font-black tabular-nums leading-none ${c.valCls}`}>{c.stat.total}</span>
+              </div>
+              <span className="mt-0.5 text-[9.5px] font-medium text-slate-500 dark:text-slate-400">
+                Pres: {c.stat.pres} · HO: {c.stat.ho}
+              </span>
+            </button>
+          );
+        })}
 
-        {/* Botão de Ação Rápida para Confirmar Todos Logados no Horário */}
+        {statusF !== 'all' && (
+          <button
+            type="button"
+            onClick={() => setStatusF('all')}
+            className="flex items-center gap-1 rounded-md bg-navy px-2.5 py-1.5 text-xs font-bold text-white shadow hover:bg-navy/90 active:scale-95"
+          >
+            <X size={13} /> Mostrar Todos
+          </button>
+        )}
+
         {scheduledToLog.length > 0 && (
           <button
             onClick={confirmAllScheduled}
             className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
           >
-            <Check size={14} strokeWidth={3} /> Dar OK nos {scheduledToLog.length} Operadores do Horário
+            <Check size={14} strokeWidth={3} /> Dar OK nos {scheduledToLog.length} do Horário
           </button>
         )}
 
@@ -506,18 +764,21 @@ export default function App() {
           />
         </div>
         <select
-          className="input !w-44 font-medium"
+          className="input !w-48 font-medium"
           value={statusF}
           onChange={(e) => setStatusF(e.target.value as StatusFilter)}
         >
           <option value="all">Status: Todos</option>
-          <option value="alert">Em Alerta ({pending.length})</option>
-          <option value="logged">Logados ({kpi.logged})</option>
-          <option value="break">Em Pausa ({kpi.brk})</option>
-          <option value="falta">🚫 Faltas ({kpi.falta})</option>
-          <option value="atestado">📋 Atestados ({kpi.atestado})</option>
-          <option value="dsr">🏖️ DSR ({kpi.dsr})</option>
-          <option value="free">Livres ({kpi.free})</option>
+          <option value="alert">Em Alerta ({summary.alert.total})</option>
+          <option value="logged">Logados ({summary.logged.total})</option>
+          <option value="break">Em Pausa ({summary.break.total})</option>
+          <option value="incident">🟠 Ocorrências HO ({summary.incident.total})</option>
+          <option value="falta">🚫 Faltas ({summary.falta.total})</option>
+          <option value="atestado">📋 Atestados ({summary.atestado.total})</option>
+          <option value="dsr">🏖️ DSR ({summary.dsr.total})</option>
+          <option value="ferias">✈️ Férias ({summary.ferias.total})</option>
+          <option value="maint">🔧 Manutenção ({summary.maint.total})</option>
+          <option value="free">Livres ({summary.free.total})</option>
         </select>
         <select className="input !w-44" value={teamF} onChange={(e) => setTeamF(e.target.value)}>
           <option value="">Equipe: Todas</option>
@@ -530,9 +791,11 @@ export default function App() {
         <div className="ml-1 flex flex-wrap items-center gap-2.5 text-[11px]">
           <Legend c="bg-[#C6EFCE] border-slate-500" t="Logado" />
           <Legend c="bg-[#FFEB9C] border-amber-500" t="Pausa" />
+          <Legend c="bg-[#FED7AA] border-orange-500" t="Ocorrência HO" />
           <Legend c="bg-[#FFC7CE] border-rose-500" t="Falta" />
           <Legend c="bg-[#B7DEE8] border-cyan-500" t="Atestado" />
           <Legend c="bg-[#E4DFEC] border-purple-500" t="DSR" />
+          <Legend c="bg-[#E0E7FF] border-indigo-400" t="Férias" />
           <Legend c="bg-[#F2F2F2] border-slate-400" t="Livre" />
           <Legend c="bg-[#FFE699] border-amber-400" t="Supervisor" />
           <Legend c="bg-red-500 border-red-700" t="Alerta" />
@@ -541,10 +804,20 @@ export default function App() {
         {error && <span className="ml-auto text-xs font-semibold text-red-600">⚠ {error}</span>}
       </div>
 
-      {/* MAPA + PAINEL */}
+      {/* MAPA + GRADE HOME OFFICE + PAINEL */}
       <div className="flex min-h-0 flex-1">
         <main className="flex-1 overflow-auto">
-          <FloorMap renderCard={renderCard} />
+          {(tab === 'presencial' || tab === 'all') && <FloorMap renderCard={renderCard} />}
+          {(tab === 'ho' || tab === 'all') && (
+            <div className={tab === 'all' ? 'border-t-2 border-indigo-200 dark:border-indigo-900' : ''}>
+              <HomeOfficeGrid
+                hoWorkstations={hoWorkstations}
+                views={views}
+                renderCard={renderCard}
+                onAddSlot={addHomeOfficeSlot}
+              />
+            </div>
+          )}
         </main>
         <AlertPanel pending={pending} history={history} onAck={ack} onAckAll={ackAllAlerts} onLocate={locate} />
       </div>
@@ -555,6 +828,7 @@ export default function App() {
           ws={editWs}
           shifts={snap.shifts.filter((s) => s.wsId === editWs.id)}
           allWs={snap.workstations}
+          occupiedWsIds={occupiedWsIds}
           onClose={() => setEditId(null)}
           onSave={saveWs}
         />
@@ -596,29 +870,6 @@ export default function App() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-function Kpi({
-  label,
-  value,
-  cls = '',
-  box = false,
-}: {
-  label: string;
-  value: number;
-  cls?: string;
-  box?: boolean;
-}) {
-  return (
-    <div
-      className={`flex items-baseline gap-2 rounded-md px-2.5 py-1 ${
-        box ? 'animate-pulse bg-red-100 dark:bg-red-950' : 'bg-slate-100 dark:bg-slate-800'
-      }`}
-    >
-      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</span>
-      <span className={`text-lg font-extrabold tabular-nums ${cls}`}>{value}</span>
     </div>
   );
 }

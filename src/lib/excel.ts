@@ -1,10 +1,12 @@
 import * as XLSX from 'xlsx';
 import type { Shift, Workstation } from '../types';
+import { hoId, hoNumber, isHomeOfficeWs, makeHomeOfficeWs } from './layout';
 import { emptyShift } from './seed';
 import { parseTimeCell } from './time';
 
 const HEAD = [
   'Código PA',
+  'Modalidade',
   'Tipo',
   'Nome',
   'Equipe/Supervisor',
@@ -19,6 +21,7 @@ const HEAD = [
 ];
 
 const typeLabel = (w: Workstation) => (w.type === 'supervisor' ? 'Supervisor' : 'Operador');
+const modalityLabel = (w: Workstation) => (isHomeOfficeWs(w) ? 'Home Office' : 'Presencial');
 
 const statusLabel = (s: Shift): string => {
   switch (s.currentState) {
@@ -32,6 +35,14 @@ const statusLabel = (s: Shift): string => {
       return 'Atestado';
     case 'dsr':
       return 'DSR';
+    case 'ferias':
+      return 'Férias';
+    case 'no_internet':
+      return 'Sem Internet';
+    case 'no_power':
+      return 'Sem Energia';
+    case 'tech_issue':
+      return 'Problema Técnico';
     case 'done':
       return 'Finalizado';
     default:
@@ -49,14 +60,17 @@ function save(rows: (string | number)[][], name: string, sheet: string) {
 
 export function downloadTemplate(wss: Workstation[]) {
   const examples: Record<string, string[]> = {
-    'PA-01': ['Maria Souza', 'Victoria', 'Logado', '08:00', '09:45', '12:00', '15:00', '17:20', 'Exemplo', 'Manhã'],
-    'PA-07': ['João Lima', 'Edson', 'Pendente', '08:30', '10:15', '12:30', '15:30', '17:50', 'Exemplo', 'Manhã'],
+    'PA-01': ['Maria Souza', 'Victoria', 'Logado', '08:00', '09:45', '12:00', '15:00', '17:20', 'Exemplo Presencial', 'Manhã'],
+    'PA-07': ['João Lima', 'Edson', 'Pendente', '08:30', '10:15', '12:30', '15:30', '17:50', 'Exemplo Presencial', 'Manhã'],
     'PA-12': ['Larissa', 'Edson', 'Falta', '07:10', '09:10', '11:50', '13:20', '15:20', 'Falta informada', 'Manhã'],
     'PA-31': ['Ana Paula', 'Pablo', 'Atestado', '12:30', '14:15', '17:00', '19:30', '21:54', 'Atestado médico', 'Tarde'],
     'SUP-01': ['Victoria', '', 'Logado', '06:00', '09:30', '11:30', '14:00', '15:24', 'Supervisor exemplo', 'Manhã'],
+    'HO-01': ['Lucas Martins', 'Edson', 'Logado', '08:00', '10:00', '12:00', '15:00', '17:00', 'Exemplo Home Office', 'Manhã'],
+    'HO-02': ['Camila Reis', 'Victoria', 'Sem Internet', '09:00', '10:50', '13:00', '15:30', '18:00', 'Ocorrência remota', 'Manhã'],
   };
   const rows = wss.map((w) => [
     w.code,
+    modalityLabel(w),
     typeLabel(w),
     ...(examples[w.code] ?? ['', '', '', '', '', '', '', '', '', '']),
   ]);
@@ -67,10 +81,11 @@ export function exportCurrent(wss: Workstation[], shifts: Shift[]) {
   const rows: string[][] = [];
   for (const w of wss) {
     const list = shifts.filter((s) => s.wsId === w.id);
-    if (!list.length) rows.push([w.code, typeLabel(w), '', '', '', '', '', '', '', '', '', '']);
+    if (!list.length) rows.push([w.code, modalityLabel(w), typeLabel(w), '', '', '', '', '', '', '', '', '', '']);
     list.forEach((s) =>
       rows.push([
         w.code,
+        modalityLabel(w),
         typeLabel(w),
         s.operatorName,
         s.team,
@@ -97,13 +112,14 @@ const norm = (k: string) =>
 
 const normCode = (c: string) => {
   const s = String(c).trim().toUpperCase();
-  const m = /^(PA|SUP)[-\s_]?0*(\d+)$/.exec(s);
+  const m = /^(PA|SUP|HO)[-\s_]?0*(\d+)$/.exec(s);
   return m ? `${m[1]}-${m[2].padStart(2, '0')}` : s;
 };
 
 export interface ImportResult {
   shifts: Shift[];
   affectedWs: Set<string>;
+  newWorkstations: Workstation[];
   warnings: string[];
 }
 
@@ -114,30 +130,72 @@ export async function parseImport(file: File, wss: Workstation[]): Promise<Impor
   const byCode = new Map(wss.map((w) => [normCode(w.code), w]));
   const shifts: Shift[] = [];
   const affected = new Set<string>();
+  const newWorkstations: Workstation[] = [];
   const warnings: string[] = [];
   const todayStr = new Date().toISOString().slice(0, 10);
+
+  let nextHoNum = wss.reduce((m, w) => (isHomeOfficeWs(w) ? Math.max(m, hoNumber(w.id)) : m), 0) + 1;
+  const usedHoIds = new Set<string>();
 
   rows.forEach((row, i) => {
     const r: Record<string, unknown> = {};
     Object.entries(row).forEach(([k, v]) => (r[norm(k)] = v));
-    const code = String(r['codigopa'] ?? '').trim();
-    if (!code) return;
-    const ws = byCode.get(normCode(code));
+
+    const modRaw = String(r['modalidade'] ?? r['local'] ?? '').toLowerCase();
+    const isRowHO = modRaw.includes('home') || modRaw === 'ho' || modRaw.includes('remoto');
+
+    let rawCode = String(r['codigopa'] ?? r['pa'] ?? '').trim();
     const name = String(r['nome'] ?? '').trim();
     const times = [r['entrada'], r['pausa101'], r['pausa1h'], r['pausa102'], r['saida']].map(parseTimeCell);
+
+    if (!rawCode && isRowHO && (name || times.some(Boolean))) {
+      // Atribui automaticamente o próximo código HO disponível se modalidade for Home Office sem código
+      const available = wss.find((w) => isHomeOfficeWs(w) && !usedHoIds.has(w.id));
+      if (available) {
+        rawCode = available.code;
+      } else {
+        rawCode = hoId(nextHoNum++);
+      }
+    }
+
+    if (!rawCode) return;
+
+    const normalized = normCode(rawCode);
+    let ws = byCode.get(normalized);
+
     if (!name && times.every((t) => !t)) {
       if (ws) affected.add(ws.id);
       return;
     }
+
+    // Se for código HO-XX novo além dos 24 existentes, cria dinamicamente
+    if (!ws && /^HO-\d+$/.test(normalized)) {
+      const n = hoNumber(normalized);
+      ws = makeHomeOfficeWs(n);
+      byCode.set(normalized, ws);
+      newWorkstations.push(ws);
+      if (n >= nextHoNum) nextHoNum = n + 1;
+    }
+
     if (!ws) {
-      warnings.push(`Linha ${i + 2}: PA "${code}" não existe no mapa — ignorada.`);
+      warnings.push(`Linha ${i + 2}: PA "${rawCode}" não existe no mapa — ignorada.`);
       return;
     }
 
-    // Detecção automática de Ausências (Falta, Atestado, DSR) a partir da planilha
-    const statusVal = String(r['status'] ?? r['statuspresenca'] ?? r['situacao'] ?? '').toLowerCase();
-    const obsVal = String(r['observacoes'] ?? '').toLowerCase();
+    if (isHomeOfficeWs(ws)) usedHoIds.add(ws.id);
+
+    // Detecção automática de Status, Ausências e Ocorrências Remotas
+    const statusVal = String(r['status'] ?? r['statuspresenca'] ?? r['situacao'] ?? '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    const obsVal = String(r['observacoes'] ?? '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
     let detectedState: Shift['currentState'] = 'pending';
+    let incidentTime = '';
 
     if (statusVal.includes('falta') || obsVal.includes('falta')) {
       detectedState = 'falta';
@@ -150,6 +208,19 @@ export async function parseImport(file: File, wss: Workstation[]): Promise<Impor
       obsVal.includes('folga')
     ) {
       detectedState = 'dsr';
+    } else if (statusVal.includes('ferias') || obsVal.includes('ferias')) {
+      detectedState = 'ferias';
+    } else if (statusVal.includes('internet') || obsVal.includes('sem internet')) {
+      detectedState = 'no_internet';
+      incidentTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    } else if (statusVal.includes('energia') || obsVal.includes('sem energia')) {
+      detectedState = 'no_power';
+      incidentTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    } else if (statusVal.includes('tecnic') || statusVal.includes('(ti)') || obsVal.includes('problema tecnic')) {
+      detectedState = 'tech_issue';
+      incidentTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    } else if (statusVal.includes('pausa')) {
+      detectedState = 'break';
     } else if (statusVal.includes('logad')) {
       detectedState = 'logged';
     }
@@ -167,7 +238,8 @@ export async function parseImport(file: File, wss: Workstation[]): Promise<Impor
       notes: String(r['observacoes'] ?? '').trim(),
       currentState: detectedState,
       stateDate: detectedState !== 'pending' ? todayStr : '',
+      incidentTime,
     });
   });
-  return { shifts, affectedWs: affected, warnings };
+  return { shifts, affectedWs: affected, newWorkstations, warnings };
 }

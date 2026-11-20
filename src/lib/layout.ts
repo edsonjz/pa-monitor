@@ -2,7 +2,45 @@ import type { Workstation } from '../types';
 
 const p2 = (n: number) => String(n).padStart(2, '0');
 export const paId = (n: number) => `PA-${p2(n)}`;
+export const hoId = (n: number) => `HO-${p2(n)}`;
 const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => paId(a + i));
+
+export const isHomeOfficeWs = (ws: Pick<Workstation, 'id' | 'blockName'>): boolean =>
+  ws.blockName === 'Home Office' || ws.id.startsWith('HO-');
+
+export const hoNumber = (id: string): number => {
+  const m = /^HO-0*(\d+)$/i.exec(id);
+  return m ? Number(m[1]) : 9999;
+};
+
+export function makeHomeOfficeWs(n: number, now = new Date().toISOString()): Workstation {
+  const id = hoId(n);
+  return {
+    id,
+    code: id,
+    label: id,
+    type: 'operator',
+    blockName: 'Home Office',
+    gridPosition: `ho-${n}`,
+    status: 'active',
+    updatedAt: now,
+  };
+}
+
+/** Garante ao menos `minCount` posições de Home Office sem alterar as PAs existentes. */
+export function ensureHomeOfficeWorkstations(wss: Workstation[], minCount = 24): Workstation[] {
+  const existing = new Set(wss.map((w) => w.id));
+  const out = [...wss];
+  const now = new Date().toISOString();
+  for (let i = 1; i <= minCount; i++) {
+    const id = hoId(i);
+    if (!existing.has(id)) {
+      out.push(makeHomeOfficeWs(i, now));
+      existing.add(id);
+    }
+  }
+  return out;
+}
 
 /** Disposição física (ids fixos dos slots; o código exibido pode ser renomeado). */
 export const LAYOUT = {
@@ -39,5 +77,5 @@ export function defaultWorkstations(): Workstation[] {
   LAYOUT.b5bottom.forEach((id, i) => add(id, 'operator', 'Bloco 5', `r2c${i + 2}`));
   LAYOUT.b6.forEach((id, i) => add(id, 'operator', 'Bloco 6', `r${i + 1}c1`));
   LAYOUT.b7.forEach((id, i) => add(id, 'operator', 'Bloco 7', `r${Math.floor(i / 2) + 1}c${(i % 2) + 1}`));
-  return out;
+  return ensureHomeOfficeWorkstations(out, 24);
 }

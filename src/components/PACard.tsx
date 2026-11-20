@@ -1,6 +1,7 @@
-import { AlertTriangle, Check } from 'lucide-react';
+import { AlertTriangle, Check, Home } from 'lucide-react';
 import type { WsView } from '../lib/engine';
-import { BREAK_LABEL, EVENT_LABEL, breakReturn } from '../lib/engine';
+import { BREAK_LABEL, EVENT_LABEL, breakReturn, isIncidentState } from '../lib/engine';
+import { isHomeOfficeWs } from '../lib/layout';
 
 interface Props {
   view: WsView;
@@ -25,35 +26,56 @@ export default function PACard({
 }: Props) {
   const { ws, shift, state, alert } = view;
   const isSup = ws.type === 'supervisor';
+  const isHO = isHomeOfficeWs(ws);
   const hasOp = !!shift && !!shift.operatorName.trim();
+  const isInc = isIncidentState(state);
 
   let bodyTone = 'pa-free';
   if (state === 'maint') bodyTone = 'pa-maint';
   else if (alert) bodyTone = 'pa-alert';
+  else if (isInc) bodyTone = 'pa-incident';
   else if (state === 'falta') bodyTone = 'pa-falta';
   else if (state === 'atestado') bodyTone = 'pa-atestado';
   else if (state === 'dsr') bodyTone = 'pa-dsr';
+  else if (state === 'ferias') bodyTone = 'pa-ferias';
   else if (state === 'break') bodyTone = 'pa-break';
   else if (state === 'logged') bodyTone = isSup ? 'pa-sup' : 'pa-logged';
   else if (isSup) bodyTone = 'pa-sup';
   else if (hasOp && (state === 'pending' || state === 'done')) bodyTone = 'pa-pending';
 
   let badge: { text: string; cls: string } | null = null;
-  if (state === 'falta') badge = { text: '🚫 FALTA', cls: 'bg-rose-600 text-white' };
+  if (state === 'no_internet') {
+    badge = {
+      text: `🌐 Sem Internet${shift?.incidentTime ? ` · ${shift.incidentTime}` : ''}`,
+      cls: 'bg-orange-600 text-white',
+    };
+  } else if (state === 'no_power') {
+    badge = {
+      text: `⚡ Sem Energia${shift?.incidentTime ? ` · ${shift.incidentTime}` : ''}`,
+      cls: 'bg-orange-600 text-white',
+    };
+  } else if (state === 'tech_issue') {
+    badge = {
+      text: `💻 Problema TI${shift?.incidentTime ? ` · ${shift.incidentTime}` : ''}`,
+      cls: 'bg-orange-600 text-white',
+    };
+  } else if (state === 'falta') badge = { text: '🚫 FALTA', cls: 'bg-rose-600 text-white' };
   else if (state === 'atestado') badge = { text: '📋 ATESTADO', cls: 'bg-cyan-700 text-white' };
   else if (state === 'dsr') badge = { text: '🏖️ DSR', cls: 'bg-purple-700 text-white' };
-  else if (state === 'break' && shift?.breakKind)
+  else if (state === 'ferias') badge = { text: '✈️ FÉRIAS', cls: 'bg-indigo-600 text-white' };
+  else if (state === 'break' && shift?.breakKind) {
     badge = {
       text: `⏸ ${BREAK_LABEL[shift.breakKind]} · ${breakReturn(shift, shift.breakKind)}`,
       cls: 'bg-amber-600/20 text-amber-950 dark:bg-amber-950/40 dark:text-amber-100',
     };
-  else if (state === 'done' && hasOp)
+  } else if (state === 'done' && hasOp) {
     badge = { text: 'Pós-logout', cls: 'bg-slate-600/20 text-slate-700 dark:text-slate-200' };
-  else if (state === 'pending' && hasOp)
+  } else if (state === 'pending' && hasOp) {
     badge = {
       text: shift?.loginTime ? `Aguarda ${shift.loginTime}` : 'Pendente',
       cls: 'bg-slate-500/15 text-slate-700 dark:text-slate-200',
     };
+  }
 
   const range =
     shift && (shift.loginTime || shift.logoutTime)
@@ -64,9 +86,11 @@ export default function PACard({
     ? 'bg-red-900 text-white border-red-950'
     : isSup
       ? 'bg-[#FFE699] text-slate-900 border-amber-400/80 dark:bg-yellow-700/80 dark:text-yellow-50 dark:border-yellow-600'
-      : 'bg-[#D9E2F3] text-slate-900 border-slate-400/70 dark:bg-slate-700 dark:text-slate-100 dark:border-slate-600';
+      : isHO
+        ? 'bg-[#C7D2FE] text-indigo-950 border-indigo-400/80 dark:bg-indigo-800 dark:text-indigo-50 dark:border-indigo-600'
+        : 'bg-[#D9E2F3] text-slate-900 border-slate-400/70 dark:bg-slate-700 dark:text-slate-100 dark:border-slate-600';
 
-  const isAbsent = state === 'falta' || state === 'atestado' || state === 'dsr';
+  const isAbsent = state === 'falta' || state === 'atestado' || state === 'dsr' || state === 'ferias';
 
   return (
     <div
@@ -82,7 +106,7 @@ export default function PACard({
       onClick={onOpen}
       title={
         hasOp
-          ? `${shift!.operatorName}${shift!.team ? ` · Equipe: ${shift!.team}` : ''} (clique para editar ou registrar Falta/Atestado/DSR)`
+          ? `${shift!.operatorName}${isHO ? ' (Home Office)' : ''}${shift!.team ? ` · Equipe: ${shift!.team}` : ''} (clique para editar, ocorrências ou transferir)`
           : 'Clique para atribuir operador'
       }
       className={`pa-card cursor-pointer ${bodyTone} ${spanClass} ${dim ? 'opacity-25' : ''} ${
@@ -90,10 +114,11 @@ export default function PACard({
       }`}
     >
       {/* FAIXA 1: CABEÇALHO FIXO (24px) */}
-      <div className={`relative flex h-[24px] shrink-0 items-center justify-center border-b px-1.5 text-[11px] font-bold ${headBg}`}>
+      <div className={`relative flex h-[24px] shrink-0 items-center justify-center gap-1 border-b px-1.5 text-[11px] font-bold ${headBg}`}>
+        {isHO && <Home size={11} className="shrink-0" />}
         <span className="truncate">
           {ws.code}
-          {isSup ? ' — SUPERVISOR' : ''}
+          {isSup ? ' — SUPERVISOR' : isHO ? ' · HOME' : ''}
         </span>
         {view.count > 1 && (
           <span className="absolute right-1 rounded bg-black/15 px-1 text-[9px] font-extrabold">{view.count}t</span>
@@ -150,13 +175,13 @@ export default function PACard({
             >
               {range}
             </span>
-            {hasOp && state === 'pending' && (
+            {hasOp && (state === 'pending' || isInc) && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onQuickLog(shift!.id);
                 }}
-                title="Dar OK: confirmar presença e marcar como Logado (Verde)"
+                title={isInc ? 'Normalizar ocorrência e marcar como Logado (Verde)' : 'Dar OK: confirmar presença e marcar como Logado (Verde)'}
                 className="flex shrink-0 items-center gap-0.5 rounded bg-emerald-600 px-1.5 py-[2px] text-[9.5px] font-extrabold text-white shadow-sm hover:bg-emerald-700 active:scale-95"
               >
                 <Check size={10} strokeWidth={3} /> OK

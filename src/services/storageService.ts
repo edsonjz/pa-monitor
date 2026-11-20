@@ -1,5 +1,5 @@
 import type { AlertLog, Shift, Snapshot, Workstation } from '../types';
-import { defaultWorkstations } from '../lib/layout';
+import { defaultWorkstations, ensureHomeOfficeWorkstations } from '../lib/layout';
 import { sampleShifts } from '../lib/seed';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 
@@ -19,7 +19,15 @@ const writeLocal = (s: Snapshot) => localStorage.setItem(KEY, JSON.stringify(s))
 
 function initLocal(): Snapshot {
   const existing = readLocal();
-  if (existing) return existing;
+  if (existing) {
+    const ensured = ensureHomeOfficeWorkstations(existing.workstations, 24);
+    if (ensured.length !== existing.workstations.length) {
+      const updated = { ...existing, workstations: ensured };
+      writeLocal(updated);
+      return updated;
+    }
+    return existing;
+  }
   // primeira inicialização: layout + 6 operadores de exemplo
   const snap: Snapshot = { workstations: defaultWorkstations(), shifts: sampleShifts(), alerts: [] };
   writeLocal(snap);
@@ -43,14 +51,16 @@ const shiftToRow = (x: Shift): Row => ({
   id: x.id, workstation_id: x.wsId, operator_name: x.operatorName, team: x.team, shift_label: x.shiftLabel,
   login_time: x.loginTime, break10_1_time: x.break101Time, break60_time: x.break60Time,
   break10_2_time: x.break102Time, logout_time: x.logoutTime, notes: x.notes,
-  current_state: x.currentState, break_kind: x.breakKind, state_date: x.stateDate, updated_at: x.updatedAt,
+  current_state: x.currentState, break_kind: x.breakKind, state_date: x.stateDate,
+  incident_time: x.incidentTime || '', updated_at: x.updatedAt,
 });
 const shiftFromRow = (r: Row): Shift => ({
   id: s(r.id), wsId: s(r.workstation_id), operatorName: s(r.operator_name), team: s(r.team),
   shiftLabel: s(r.shift_label), loginTime: s(r.login_time), break101Time: s(r.break10_1_time),
   break60Time: s(r.break60_time), break102Time: s(r.break10_2_time), logoutTime: s(r.logout_time),
   notes: s(r.notes), currentState: (s(r.current_state) || 'pending') as Shift['currentState'],
-  breakKind: s(r.break_kind) as Shift['breakKind'], stateDate: s(r.state_date), updatedAt: s(r.updated_at),
+  breakKind: s(r.break_kind) as Shift['breakKind'], stateDate: s(r.state_date),
+  incidentTime: s(r.incident_time), updatedAt: s(r.updated_at),
 });
 const alertToRow = (a: AlertLog): Row => ({
   id: a.id, shift_id: a.shiftId, workstation_id: a.wsId, ws_code: a.wsCode, operator_name: a.operatorName,
@@ -80,6 +90,14 @@ async function loadRemote(): Promise<Snapshot> {
   if (workstations.length === 0) {
     workstations = defaultWorkstations();
     await must(db.from('workstations').upsert(workstations.map(wsToRow)));
+  } else {
+    const existingIds = new Set(workstations.map((x) => x.id));
+    const ensured = ensureHomeOfficeWorkstations(workstations, 24);
+    const added = ensured.filter((x) => !existingIds.has(x.id));
+    if (added.length > 0) {
+      workstations = ensured;
+      await must(db.from('workstations').upsert(added.map(wsToRow)));
+    }
   }
   return { workstations, shifts: (sh as Row[]).map(shiftFromRow), alerts: (al as Row[]).map(alertFromRow) };
 }

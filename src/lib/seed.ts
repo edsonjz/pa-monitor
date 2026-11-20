@@ -18,6 +18,7 @@ export const emptyShift = (wsId: string, label = 'Manhã'): Shift => ({
   currentState: 'pending',
   breakKind: '',
   stateDate: '',
+  incidentTime: '',
   updatedAt: new Date().toISOString(),
 });
 

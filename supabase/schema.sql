@@ -26,9 +26,10 @@ create table if not exists public.operator_shifts (
   break10_2_time  text,
   logout_time     text,
   notes           text,
-  current_state   text not null default 'pending' check (current_state in ('pending','logged','break','done','falta','atestado','dsr')),
+  current_state   text not null default 'pending' check (current_state in ('pending','logged','break','done','falta','atestado','dsr','ferias','no_internet','no_power','tech_issue')),
   break_kind      text,
   state_date      text,
+  incident_time   text not null default '',
   updated_at      timestamptz not null default now()
 );
 
