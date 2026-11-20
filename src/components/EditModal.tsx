@@ -86,7 +86,7 @@ export default function EditModal({ ws, shifts, allWs, onClose, onSave }: Props)
                 <input className="input" list="turnos" value={s.shiftLabel} onChange={(e) => patch(s.id, { shiftLabel: e.target.value })} />
                 <datalist id="turnos">{labels.map((l) => <option key={l} value={l} />)}</datalist></div>
 
-              <div className="col-span-2 sm:col-span-4 flex flex-wrap items-center gap-3 rounded-md bg-slate-50 p-2 dark:bg-slate-800">
+              <div className="col-span-2 sm:col-span-4 flex flex-wrap items-center gap-3 rounded-md bg-slate-50 p-2.5 dark:bg-slate-800">
                 <div className="flex-1 min-w-[200px]">
                   <span className="label">Status do Operador</span>
                   <select
@@ -96,17 +96,41 @@ export default function EditModal({ ws, shifts, allWs, onClose, onSave }: Props)
                   >
                     <option value="logged">🟢 Logado (Verde)</option>
                     <option value="break">🟡 Em Pausa (Amarelo)</option>
+                    <option value="falta">🚫 Falta (Ausente)</option>
+                    <option value="atestado">📋 Atestado Médico</option>
+                    <option value="dsr">🏖️ DSR (Descanso Semanal)</option>
                     <option value="pending">⚪ Aguardando Login (Pendente)</option>
                     <option value="done">⚫ Pós-Logout (Finalizado)</option>
                   </select>
                 </div>
-                <div className="pt-4">
+                <div className="flex flex-wrap items-center gap-1.5 pt-3">
                   <button
                     type="button"
                     onClick={() => patch(s.id, { currentState: 'logged', breakKind: '', stateDate: todayStr })}
-                    className="flex items-center gap-1 rounded bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
+                    className="flex items-center gap-1 rounded bg-emerald-600 px-2.5 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
                   >
-                    <Check size={14} strokeWidth={3} /> Dar OK (Marcar Logado)
+                    <Check size={13} strokeWidth={3} /> Logado
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => patch(s.id, { currentState: 'falta', breakKind: '', stateDate: todayStr })}
+                    className="flex items-center gap-1 rounded bg-rose-600 px-2 py-1.5 text-xs font-bold text-white shadow hover:bg-rose-700 active:scale-95 transition"
+                  >
+                    🚫 Falta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => patch(s.id, { currentState: 'atestado', breakKind: '', stateDate: todayStr })}
+                    className="flex items-center gap-1 rounded bg-cyan-700 px-2 py-1.5 text-xs font-bold text-white shadow hover:bg-cyan-800 active:scale-95 transition"
+                  >
+                    📋 Atestado
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => patch(s.id, { currentState: 'dsr', breakKind: '', stateDate: todayStr })}
+                    className="flex items-center gap-1 rounded bg-purple-700 px-2 py-1.5 text-xs font-bold text-white shadow hover:bg-purple-800 active:scale-95 transition"
+                  >
+                    🏖️ DSR
                   </button>
                 </div>
               </div>

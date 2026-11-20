@@ -19,7 +19,7 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
-import type { AlertLog, Shift, Snapshot, Workstation } from './types';
+import type { AlertLog, Shift, ShiftState, Snapshot, Workstation } from './types';
 import { useStore } from './hooks/useStore';
 import { useClock } from './hooks/useClock';
 import { applyAck, buildViews, detectAlerts, effectiveState, inWindow } from './lib/engine';
@@ -36,7 +36,7 @@ import AlertPanel from './components/AlertPanel';
 import SettingsModal from './components/SettingsModal';
 import LoginScreen from './components/LoginScreen';
 
-type StatusFilter = 'all' | 'alert' | 'logged' | 'break' | 'free';
+type StatusFilter = 'all' | 'alert' | 'logged' | 'break' | 'falta' | 'atestado' | 'dsr' | 'free';
 
 /** Troca de lugar (ou move) todos os turnos entre duas PAs. */
 function swapWs(s: Snapshot, a: string, b: string): Snapshot {
@@ -145,6 +145,9 @@ export default function App() {
       total: v.length,
       logged: v.filter((x) => x.category === 'logged').length,
       brk: v.filter((x) => x.category === 'break').length,
+      falta: v.filter((x) => x.category === 'falta').length,
+      atestado: v.filter((x) => x.category === 'atestado').length,
+      dsr: v.filter((x) => x.category === 'dsr').length,
       free: v.filter((x) => x.category === 'free').length,
     };
   }, [views]);
@@ -209,12 +212,46 @@ export default function App() {
     flash('Operador confirmado como Logado (Verde).');
   };
 
+  // Alteração de status direto (Falta, Atestado, DSR, etc.)
+  const setOperatorState = (shiftId: string, newState: ShiftState) => {
+    update((s) => {
+      const iso = nowRef.current.toISOString();
+      const today = todayStr(nowRef.current);
+      return {
+        ...s,
+        shifts: s.shifts.map((sh) =>
+          sh.id === shiftId
+            ? {
+                ...sh,
+                currentState: newState,
+                breakKind: newState === 'break' ? (sh.breakKind || 'b60') : '',
+                stateDate: today,
+                updatedAt: iso,
+              }
+            : sh,
+        ),
+        alerts: s.alerts.map((al) =>
+          al.shiftId === shiftId && !al.acknowledgedAt ? { ...al, acknowledgedAt: iso } : al,
+        ),
+      };
+    });
+    const labels: Record<string, string> = {
+      falta: 'Falta registrada (Alertas desativados)',
+      atestado: 'Atestado médico registrado (Alertas desativados)',
+      dsr: 'DSR registrado (Alertas desativados)',
+      logged: 'Operador marcado como Logado (Verde)',
+      pending: 'Operador colocado como Pendente',
+      break: 'Operador colocado em Pausa',
+    };
+    flash(labels[newState] || `Status atualizado para ${newState}.`);
+  };
+
   // Operadores que estão no horário de trabalho mas ainda não estão com status "logado"
   const scheduledToLog = useMemo(() => {
     return (snap?.shifts ?? []).filter((s) => {
       if (!s.operatorName.trim()) return false;
       const st = effectiveState(s, today);
-      if (st === 'logged') return false;
+      if (st === 'logged' || st === 'falta' || st === 'atestado' || st === 'dsr') return false;
       return inWindow(s, nowMin);
     });
   }, [snap, today, nowMin]);
@@ -299,6 +336,9 @@ export default function App() {
     if (statusF === 'alert' && !v.alert) return false;
     if (statusF === 'logged' && v.category !== 'logged') return false;
     if (statusF === 'break' && v.category !== 'break') return false;
+    if (statusF === 'falta' && v.category !== 'falta') return false;
+    if (statusF === 'atestado' && v.category !== 'atestado') return false;
+    if (statusF === 'dsr' && v.category !== 'dsr') return false;
     if (statusF === 'free' && v.category !== 'free') return false;
     return true;
   };
@@ -316,6 +356,7 @@ export default function App() {
         onOpen={() => setEditId(id)}
         onAck={ack}
         onQuickLog={quickLog}
+        onSetState={setOperatorState}
         onDropOn={(a, b) => update((s) => swapWs(s, a, b))}
       />
     );
@@ -442,10 +483,13 @@ export default function App() {
       </header>
 
       {/* KPIs + BOTAO DE CONFIRMAR TODOS LOGADOS */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-slate-300 bg-white px-4 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+      <div className="flex flex-wrap items-center gap-2.5 border-b border-slate-300 bg-white px-4 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
         <Kpi label="Total PAs" value={kpi.total} />
-        <Kpi label="Logados agora" value={kpi.logged} cls="text-emerald-600 font-black" />
+        <Kpi label="Logados" value={kpi.logged} cls="text-emerald-600 font-black" />
         <Kpi label="Em pausa" value={kpi.brk} cls="text-amber-600 font-black" />
+        <Kpi label="Faltas" value={kpi.falta} cls={kpi.falta > 0 ? 'text-rose-600 font-black' : ''} />
+        <Kpi label="Atestados" value={kpi.atestado} cls={kpi.atestado > 0 ? 'text-cyan-700 font-black' : ''} />
+        <Kpi label="DSR" value={kpi.dsr} cls={kpi.dsr > 0 ? 'text-purple-700 font-black' : ''} />
         <Kpi label="Livres" value={kpi.free} />
         <Kpi
           label="Alertas pendentes"
@@ -478,34 +522,40 @@ export default function App() {
         <div className="relative">
           <Search size={14} className="absolute left-2 top-2.5 text-slate-400" />
           <input
-            className="input !w-56 !pl-7"
+            className="input !w-52 !pl-7"
             placeholder="Buscar nome ou código da PA"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
         <select
-          className="input !w-44"
+          className="input !w-44 font-medium"
           value={statusF}
           onChange={(e) => setStatusF(e.target.value as StatusFilter)}
         >
           <option value="all">Status: Todos</option>
-          <option value="alert">Em Alerta</option>
-          <option value="logged">Logados</option>
-          <option value="break">Em Pausa</option>
-          <option value="free">Livres</option>
+          <option value="alert">Em Alerta ({pending.length})</option>
+          <option value="logged">Logados ({kpi.logged})</option>
+          <option value="break">Em Pausa ({kpi.brk})</option>
+          <option value="falta">🚫 Faltas ({kpi.falta})</option>
+          <option value="atestado">📋 Atestados ({kpi.atestado})</option>
+          <option value="dsr">🏖️ DSR ({kpi.dsr})</option>
+          <option value="free">Livres ({kpi.free})</option>
         </select>
-        <select className="input !w-48" value={teamF} onChange={(e) => setTeamF(e.target.value)}>
-          <option value="">Supervisor/Equipe: Todos</option>
+        <select className="input !w-44" value={teamF} onChange={(e) => setTeamF(e.target.value)}>
+          <option value="">Equipe: Todas</option>
           {teams.map((t) => (
             <option key={t} value={t}>
               {t}
             </option>
           ))}
         </select>
-        <div className="ml-2 flex items-center gap-3 text-[11px]">
+        <div className="ml-1 flex flex-wrap items-center gap-2.5 text-[11px]">
           <Legend c="bg-emerald-300 border-emerald-500" t="Logado" />
           <Legend c="bg-amber-300 border-amber-500" t="Pausa" />
+          <Legend c="bg-rose-300 border-rose-500" t="Falta" />
+          <Legend c="bg-cyan-300 border-cyan-500" t="Atestado" />
+          <Legend c="bg-purple-300 border-purple-500" t="DSR" />
           <Legend c="bg-slate-200 border-slate-400" t="Livre" />
           <Legend c="bg-[#FFE699] border-yellow-500" t="Supervisor" />
           <Legend c="bg-red-500 border-red-700" t="Alerta" />
@@ -586,12 +636,12 @@ function Kpi({
 }) {
   return (
     <div
-      className={`flex items-baseline gap-2 rounded-md px-3 py-1 ${
+      className={`flex items-baseline gap-2 rounded-md px-2.5 py-1 ${
         box ? 'animate-pulse bg-red-100 dark:bg-red-950' : 'bg-slate-100 dark:bg-slate-800'
       }`}
     >
       <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</span>
-      <span className={`text-xl font-extrabold tabular-nums ${cls}`}>{value}</span>
+      <span className={`text-lg font-extrabold tabular-nums ${cls}`}>{value}</span>
     </div>
   );
 }
@@ -599,7 +649,7 @@ function Kpi({
 function Legend({ c, t }: { c: string; t: string }) {
   return (
     <span className="flex items-center gap-1">
-      <span className={`inline-block h-3 w-3 rounded-sm border ${c}`} />
+      <span className={`inline-block h-2.5 w-2.5 rounded-sm border ${c}`} />
       {t}
     </span>
   );

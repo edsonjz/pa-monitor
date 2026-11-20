@@ -12,6 +12,9 @@ body {
   .pa-free { @apply bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300; }
   .pa-logged { @apply bg-emerald-200 text-emerald-950 font-semibold border-emerald-500 shadow-sm dark:bg-emerald-800/80 dark:text-emerald-50 dark:border-emerald-600; }
   .pa-break { @apply bg-amber-300 text-amber-950 dark:bg-amber-600/80 dark:text-amber-50; }
+  .pa-falta { @apply bg-rose-200 text-rose-950 font-semibold border-rose-500 shadow-sm dark:bg-rose-950/80 dark:text-rose-100 dark:border-rose-600; }
+  .pa-atestado { @apply bg-cyan-200 text-cyan-950 font-semibold border-cyan-500 shadow-sm dark:bg-cyan-950/80 dark:text-cyan-100 dark:border-cyan-600; }
+  .pa-dsr { @apply bg-purple-200 text-purple-950 font-semibold border-purple-500 shadow-sm dark:bg-purple-950/80 dark:text-purple-100 dark:border-purple-600; }
   .pa-sup { @apply bg-[#FFE699] text-yellow-950 dark:bg-yellow-700/60 dark:text-yellow-50; }
   .pa-maint { @apply bg-slate-300 text-slate-700 dark:bg-slate-700 dark:text-slate-300; background-image: repeating-linear-gradient(45deg, transparent 0 8px, rgba(0,0,0,.08) 8px 16px); }
   .pa-alert { @apply animate-alertBlink border-2 text-white; }

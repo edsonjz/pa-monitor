@@ -78,6 +78,10 @@ export function detectAlerts(
     if (!ws || ws.status === 'maintenance') continue;
 
     const curState = effectiveState(s, today);
+    // Operadores em Falta, Atestado ou DSR não geram alertas operacionais
+    if (curState === 'falta' || curState === 'atestado' || curState === 'dsr') {
+      continue;
+    }
     const logoutM = toMin(s.logoutTime);
     const loginM = toMin(s.loginTime);
     const isPastLogout =
@@ -153,13 +157,13 @@ export function inWindow(s: Shift, now: number): boolean {
   return (now >= a && now < b) || (now + 1440 >= a && now + 1440 < b);
 }
 
-export type Category = 'free' | 'logged' | 'break' | 'maint';
+export type Category = 'free' | 'logged' | 'break' | 'maint' | 'falta' | 'atestado' | 'dsr';
 
 export interface WsView {
   ws: Workstation;
   shift: Shift | null;
   count: number;
-  state: 'free' | 'pending' | 'logged' | 'break' | 'done' | 'maint';
+  state: 'free' | 'pending' | 'logged' | 'break' | 'done' | 'maint' | 'falta' | 'atestado' | 'dsr';
   category: Category;
   alert: AlertLog | null;
   alertCount: number;
@@ -183,13 +187,25 @@ export function buildViews(
     let shift: Shift | null = null;
     if (als.length) shift = list.find((s) => s.id === als[0].shiftId) ?? null;
     if (!shift) shift = list.find((s) => inWindow(s, now)) ?? null;
-    if (!shift) shift = list.find((s) => ['logged', 'break'].includes(effectiveState(s, today))) ?? null;
+    if (!shift) shift = list.find((s) => ['logged', 'break', 'falta', 'atestado', 'dsr'].includes(effectiveState(s, today))) ?? null;
     if (!shift) shift = list[0] ?? null;
     let state: WsView['state'] = 'free';
     if (ws.status === 'maintenance') state = 'maint';
     else if (shift) state = effectiveState(shift, today);
     const category: Category =
-      state === 'maint' ? 'maint' : state === 'logged' ? 'logged' : state === 'break' ? 'break' : 'free';
+      state === 'maint'
+        ? 'maint'
+        : state === 'logged'
+        ? 'logged'
+        : state === 'break'
+        ? 'break'
+        : state === 'falta'
+        ? 'falta'
+        : state === 'atestado'
+        ? 'atestado'
+        : state === 'dsr'
+        ? 'dsr'
+        : 'free';
     map.set(ws.id, {
       ws,
       shift,

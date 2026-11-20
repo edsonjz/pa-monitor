@@ -1,4 +1,5 @@
 import { AlertTriangle, Check } from 'lucide-react';
+import type { ShiftState } from '../types';
 import type { WsView } from '../lib/engine';
 import { BREAK_LABEL, EVENT_LABEL, breakReturn } from '../lib/engine';
 
@@ -10,6 +11,7 @@ interface Props {
   onOpen: () => void;
   onAck: (alertId: string) => void;
   onQuickLog: (shiftId: string) => void;
+  onSetState: (shiftId: string, newState: ShiftState) => void;
   onDropOn: (fromId: string, toId: string) => void;
 }
 
@@ -21,6 +23,7 @@ export default function PACard({
   onOpen,
   onAck,
   onQuickLog,
+  onSetState,
   onDropOn,
 }: Props) {
   const { ws, shift, state, alert } = view;
@@ -29,6 +32,9 @@ export default function PACard({
   let tone = 'pa-free';
   if (state === 'maint') tone = 'pa-maint';
   else if (alert) tone = 'pa-alert';
+  else if (state === 'falta') tone = 'pa-falta';
+  else if (state === 'atestado') tone = 'pa-atestado';
+  else if (state === 'dsr') tone = 'pa-dsr';
   else if (state === 'break') tone = 'pa-break';
   else if (state === 'logged') tone = isSup ? 'pa-sup ring-2 ring-emerald-500' : 'pa-logged';
   else if (isSup) tone = 'pa-sup';
@@ -36,7 +42,10 @@ export default function PACard({
   let status = 'Livre';
   if (state === 'maint') status = 'Manutenção';
   else if (shift) {
-    if (state === 'logged') status = 'Logado';
+    if (state === 'falta') status = '🚫 Falta';
+    else if (state === 'atestado') status = '📋 Atestado';
+    else if (state === 'dsr') status = '🏖️ DSR';
+    else if (state === 'logged') status = 'Logado';
     else if (state === 'break' && shift.breakKind)
       status = `${BREAK_LABEL[shift.breakKind]} · volta ${breakReturn(shift, shift.breakKind)}`;
     else if (state === 'done') status = 'Pós-logout';
@@ -50,6 +59,8 @@ export default function PACard({
   const headBg = alert
     ? 'bg-red-900 text-white'
     : 'bg-[#D9E2F3] text-navy dark:bg-slate-700 dark:text-slate-100';
+
+  const isAbsent = state === 'falta' || state === 'atestado' || state === 'dsr';
 
   return (
     <div
@@ -86,40 +97,124 @@ export default function PACard({
             {alert.operatorName || '—'} · {alert.scheduledTime}
             {view.alertCount > 1 ? ` (+${view.alertCount - 1})` : ''}
           </div>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onAck(alert.id);
-            }}
-            className="flex items-center justify-center gap-1 rounded bg-white py-0.5 text-xs font-extrabold text-red-700 shadow hover:bg-red-50"
-          >
-            <Check size={12} strokeWidth={3} /> OK
-          </button>
-        </div>
-      ) : (
-        <div className="flex flex-1 flex-col justify-center gap-0.5 px-1.5 text-center">
-          <div className={`truncate text-[12px] font-semibold ${hasOp ? '' : 'italic opacity-70'}`}>
-            {hasOp ? shift!.operatorName : state === 'maint' ? '🔧' : 'Livre'}
-          </div>
-          <div className="truncate text-[10px] font-medium">{status}</div>
-          <div className={`truncate text-[10px] ${shift ? 'font-bold' : 'italic opacity-60'}`}>{range}</div>
-
-          {hasOp && state !== 'logged' && state !== 'maint' && (
+          <div className="flex gap-1">
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onQuickLog(shift!.id);
+                onAck(alert.id);
               }}
-              title="Dar OK: confirmar presença e marcar como Logado (Verde)"
-              className="mx-auto mt-0.5 flex items-center justify-center gap-1 rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-extrabold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
+              className="flex flex-1 items-center justify-center gap-1 rounded bg-white py-0.5 text-xs font-extrabold text-red-700 shadow hover:bg-red-50"
             >
-              <Check size={11} strokeWidth={3} /> Dar OK
+              <Check size={12} strokeWidth={3} /> OK
             </button>
+            <select
+              value=""
+              onChange={(e) => {
+                e.stopPropagation();
+                if (e.target.value) onSetState(shift!.id, e.target.value as ShiftState);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              title="Atribuir Falta / Atestado / DSR"
+              className="rounded bg-white/90 px-1 py-0.5 text-[9px] font-bold text-slate-800 outline-none"
+            >
+              <option value="" disabled>Ausência</option>
+              <option value="falta">🚫 Falta</option>
+              <option value="atestado">📋 Atestado</option>
+              <option value="dsr">🏖️ DSR</option>
+            </select>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-1 flex-col justify-center gap-0.5 px-1 text-center">
+          <div className={`truncate text-[12px] font-semibold ${hasOp ? '' : 'italic opacity-70'} ${isAbsent ? 'line-through opacity-85' : ''}`}>
+            {hasOp ? shift!.operatorName : state === 'maint' ? '🔧' : 'Livre'}
+          </div>
+          <div className="truncate text-[10px] font-bold">{status}</div>
+          <div className={`truncate text-[10px] ${shift ? 'font-medium' : 'italic opacity-60'}`}>{range}</div>
+
+          {hasOp && isAbsent && (
+            <div className="mt-0.5 flex items-center justify-center gap-1">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onQuickLog(shift!.id);
+                }}
+                title="Reativar e colocar como Logado (Verde)"
+                className="rounded bg-emerald-600 px-1.5 py-0.2 text-[9px] font-bold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
+              >
+                ✓ Reativar
+              </button>
+              <select
+                value=""
+                onChange={(e) => {
+                  e.stopPropagation();
+                  if (e.target.value) onSetState(shift!.id, e.target.value as ShiftState);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                title="Alterar ausência"
+                className="rounded border border-black/20 bg-white/80 px-1 py-0.2 text-[9px] font-bold text-slate-800 outline-none hover:bg-white"
+              >
+                <option value="" disabled>Mudar</option>
+                <option value="falta">🚫 Falta</option>
+                <option value="atestado">📋 Atestado</option>
+                <option value="dsr">🏖️ DSR</option>
+                <option value="pending">⚪ Pendente</option>
+              </select>
+            </div>
           )}
 
-          {hasOp && state === 'logged' && (
-            <div className="mx-auto mt-0.5 flex items-center justify-center gap-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
-              <Check size={11} strokeWidth={3} /> Logado
+          {hasOp && !isAbsent && state !== 'logged' && state !== 'maint' && (
+            <div className="mt-0.5 flex items-center justify-center gap-1">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onQuickLog(shift!.id);
+                }}
+                title="Dar OK: confirmar presença e marcar como Logado (Verde)"
+                className="flex items-center justify-center gap-1 rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-extrabold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
+              >
+                <Check size={11} strokeWidth={3} /> Dar OK
+              </button>
+              <select
+                value=""
+                onChange={(e) => {
+                  e.stopPropagation();
+                  if (e.target.value) onSetState(shift!.id, e.target.value as ShiftState);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                title="Atribuir Falta / Atestado / DSR"
+                className="rounded border border-slate-300 bg-white/90 px-1 py-0.5 text-[9px] font-bold text-slate-700 outline-none hover:bg-white dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+              >
+                <option value="" disabled>Ausência</option>
+                <option value="falta">🚫 Falta</option>
+                <option value="atestado">📋 Atestado</option>
+                <option value="dsr">🏖️ DSR</option>
+              </select>
+            </div>
+          )}
+
+          {hasOp && !isAbsent && state === 'logged' && (
+            <div className="mt-0.5 flex items-center justify-center gap-1">
+              <div className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
+                <Check size={11} strokeWidth={3} /> Logado
+              </div>
+              <select
+                value=""
+                onChange={(e) => {
+                  e.stopPropagation();
+                  if (e.target.value) onSetState(shift!.id, e.target.value as ShiftState);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                title="Atribuir Falta / Atestado / DSR"
+                className="rounded border border-emerald-400 bg-white/80 px-1 py-0.2 text-[9px] font-bold text-slate-700 outline-none hover:bg-white dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+              >
+                <option value="" disabled>Mudar</option>
+                <option value="falta">🚫 Falta</option>
+                <option value="atestado">📋 Atestado</option>
+                <option value="dsr">🏖️ DSR</option>
+                <option value="break">🟡 Pausa</option>
+                <option value="pending">⚪ Pendente</option>
+              </select>
             </div>
           )}
         </div>

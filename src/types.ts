@@ -12,7 +12,8 @@ export interface Workstation {
   updatedAt: string;
 }
 
-export type ShiftState = 'pending' | 'logged' | 'break' | 'done';
+export type ShiftState = 'pending' | 'logged' | 'break' | 'done' | 'falta' | 'atestado' | 'dsr';
+export type AbsenceKind = 'falta' | 'atestado' | 'dsr';
 export type BreakKind = '' | 'b1' | 'b60' | 'b2';
 
 export interface Shift {
