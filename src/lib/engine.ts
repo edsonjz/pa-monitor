@@ -103,10 +103,9 @@ export function detectAlerts(
     }
     const logoutM = toMin(s.logoutTime);
     const loginM = toMin(s.loginTime);
-    const isPastLogout =
-      logoutM !== null &&
-      loginM !== null &&
-      (logoutM < loginM ? nowMin >= logoutM && nowMin < loginM : nowMin >= logoutM);
+    const isPastLogout = isPastShiftLogout(s, nowMin);
+    const relNow =
+      loginM !== null && logoutM !== null && logoutM < loginM && nowMin < loginM ? nowMin + 1440 : nowMin;
 
     for (const ev of shiftEvents(s)) {
       let isDue = false;
@@ -121,12 +120,12 @@ export function detectAlerts(
         }
       } else if (ev.type === 'b1r' || ev.type === 'b60r' || ev.type === 'b2r') {
         if (curState === 'break' && !isPastLogout) {
-          const evReached = nowMin >= ev.time || (ev.time >= 1440 && nowMin + 1440 >= ev.time);
-          if (evReached) isDue = true;
+          if (relNow >= ev.time) isDue = true;
         }
       } else if (ev.type === 'logout') {
+        // Dispara continuamente se o operador ainda estiver logado ou em pausa quando chegar/passar o horário de saída
         if (curState === 'logged' || curState === 'break') {
-          isDue = due(ev.time, nowMin);
+          isDue = isPastLogout || due(ev.time, nowMin);
         }
       }
 
@@ -178,6 +177,13 @@ export function applyAck(s: Shift, type: EventType, today: string, nowIso: strin
 export const effectiveState = (s: Shift, today: string): ShiftState =>
   s.stateDate === today ? s.currentState : 'pending';
 
+export function isPastShiftLogout(s: Shift, nowMin: number): boolean {
+  const loginM = toMin(s.loginTime);
+  const logoutM = toMin(s.logoutTime);
+  if (loginM === null || logoutM === null) return false;
+  return logoutM < loginM ? nowMin >= logoutM && nowMin < loginM : nowMin >= logoutM;
+}
+
 export function inWindow(s: Shift, now: number): boolean {
   const a = toMin(s.loginTime);
   const bRaw = toMin(s.logoutTime);
@@ -205,6 +211,7 @@ export interface WsView {
   category: Category;
   alert: AlertLog | null;
   alertCount: number;
+  pastLogout: boolean;
 }
 
 const ACTIVE_STATES: ShiftState[] = [
@@ -268,6 +275,7 @@ export function buildViews(
       category,
       alert: als[0] ?? null,
       alertCount: als.length,
+      pastLogout: shift ? isPastShiftLogout(shift, now) : false,
     });
   }
   return map;

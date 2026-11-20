@@ -11,6 +11,7 @@ interface Props {
   onOpen: () => void;
   onAck: (alertId: string) => void;
   onQuickLog: (shiftId: string) => void;
+  onQuickLogout: (shiftId: string) => void;
   onDropOn: (fromId: string, toId: string) => void;
 }
 
@@ -22,9 +23,10 @@ export default function PACard({
   onOpen,
   onAck,
   onQuickLog,
+  onQuickLogout,
   onDropOn,
 }: Props) {
-  const { ws, shift, state, alert } = view;
+  const { ws, shift, state, alert, pastLogout } = view;
   const isSup = ws.type === 'supervisor';
   const isHO = isHomeOfficeWs(ws);
   const hasOp = !!shift && !!shift.operatorName.trim();
@@ -63,7 +65,12 @@ export default function PACard({
   else if (state === 'atestado') badge = { text: '📋 ATESTADO', cls: 'bg-cyan-700 text-white' };
   else if (state === 'dsr') badge = { text: '🏖️ DSR', cls: 'bg-purple-700 text-white' };
   else if (state === 'ferias') badge = { text: '✈️ FÉRIAS', cls: 'bg-indigo-600 text-white' };
-  else if (state === 'break' && shift?.breakKind) {
+  else if ((state === 'logged' || state === 'break') && pastLogout && shift?.logoutTime) {
+    badge = {
+      text: `⏰ Saída ${shift.logoutTime}`,
+      cls: 'bg-red-600 text-white',
+    };
+  } else if (state === 'break' && shift?.breakKind) {
     badge = {
       text: `⏸ ${BREAK_LABEL[shift.breakKind]} · ${breakReturn(shift, shift.breakKind)}`,
       cls: 'bg-amber-600/20 text-amber-950 dark:bg-amber-950/40 dark:text-amber-100',
@@ -71,10 +78,15 @@ export default function PACard({
   } else if (state === 'done' && hasOp) {
     badge = { text: 'Pós-logout', cls: 'bg-slate-600/20 text-slate-700 dark:text-slate-200' };
   } else if (state === 'pending' && hasOp) {
-    badge = {
-      text: shift?.loginTime ? `Aguarda ${shift.loginTime}` : 'Pendente',
-      cls: 'bg-slate-500/15 text-slate-700 dark:text-slate-200',
-    };
+    badge = pastLogout && shift?.logoutTime
+      ? {
+          text: `Encerrado ${shift.logoutTime}`,
+          cls: 'bg-slate-600/20 text-slate-700 dark:text-slate-200',
+        }
+      : {
+          text: shift?.loginTime ? `Aguarda ${shift.loginTime}` : 'Pendente',
+          cls: 'bg-slate-500/15 text-slate-700 dark:text-slate-200',
+        };
   }
 
   const range =
@@ -175,7 +187,7 @@ export default function PACard({
             >
               {range}
             </span>
-            {hasOp && (state === 'pending' || isInc) && (
+            {hasOp && ((state === 'pending' && !pastLogout) || isInc) && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -185,6 +197,18 @@ export default function PACard({
                 className="flex shrink-0 items-center gap-0.5 rounded bg-emerald-600 px-1.5 py-[2px] text-[9.5px] font-extrabold text-white shadow-sm hover:bg-emerald-700 active:scale-95"
               >
                 <Check size={10} strokeWidth={3} /> OK
+              </button>
+            )}
+            {hasOp && (state === 'logged' || state === 'break') && pastLogout && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onQuickLogout(shift!.id);
+                }}
+                title="Confirmar logout e encerrar turno (Pós-logout)"
+                className="flex shrink-0 items-center gap-0.5 rounded bg-rose-600 px-1.5 py-[2px] text-[9.5px] font-extrabold text-white shadow-sm hover:bg-rose-700 active:scale-95"
+              >
+                <Check size={10} strokeWidth={3} /> Deslogar
               </button>
             )}
           </div>

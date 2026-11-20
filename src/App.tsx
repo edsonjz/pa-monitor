@@ -26,7 +26,7 @@ import {
 import type { AlertLog, Shift, Snapshot, Workstation } from './types';
 import { useStore } from './hooks/useStore';
 import { useClock } from './hooks/useClock';
-import { applyAck, buildViews, detectAlerts, effectiveState, inWindow, isIncidentState } from './lib/engine';
+import { applyAck, buildViews, detectAlerts, effectiveState, inWindow, isIncidentState, isPastShiftLogout } from './lib/engine';
 import { fmtClock, minOfDay, todayStr } from './lib/time';
 import { beep } from './lib/sound';
 import { downloadTemplate, exportCurrent, parseImport } from './lib/excel';
@@ -295,6 +295,26 @@ export default function App() {
     flash(wasIncident ? 'Ocorrência normalizada · Operador Logado (Verde).' : 'Operador confirmado como Logado (Verde).');
   };
 
+  // Botão rápido "Deslogar" para confirmar encerramento do turno vencido
+  const quickLogout = (shiftId: string) => {
+    update((s) => {
+      const iso = nowRef.current.toISOString();
+      const dStr = todayStr(nowRef.current);
+      return {
+        ...s,
+        shifts: s.shifts.map((sh) =>
+          sh.id === shiftId
+            ? { ...sh, currentState: 'done', breakKind: '', stateDate: dStr, incidentTime: '', updatedAt: iso }
+            : sh,
+        ),
+        alerts: s.alerts.map((al) =>
+          al.shiftId === shiftId && !al.acknowledgedAt ? { ...al, acknowledgedAt: iso } : al,
+        ),
+      };
+    });
+    flash('Operador deslogado (Pós-logout).');
+  };
+
   // Operadores que estão no horário de trabalho mas ainda não estão com status "logado"
   const scheduledToLog = useMemo(() => {
     return (snap?.shifts ?? []).filter((s) => {
@@ -303,6 +323,15 @@ export default function App() {
       if (st === 'logged' || st === 'falta' || st === 'atestado' || st === 'dsr' || st === 'ferias' || isIncidentState(st))
         return false;
       return inWindow(s, nowMin);
+    });
+  }, [snap, today, nowMin]);
+
+  // Operadores logados ou em pausa cujo horário de saída já passou
+  const overdueLogouts = useMemo(() => {
+    return (snap?.shifts ?? []).filter((s) => {
+      if (!s.operatorName.trim()) return false;
+      const st = effectiveState(s, today);
+      return (st === 'logged' || st === 'break') && isPastShiftLogout(s, nowMin);
     });
   }, [snap, today, nowMin]);
 
@@ -327,6 +356,29 @@ export default function App() {
       };
     });
     flash(`${count} operador(es) do horário confirmados como Logados (Verde).`);
+  };
+
+  // Confirmar logout em lote para todos os operadores com horário de saída vencido
+  const confirmAllOverdueLogouts = () => {
+    if (!overdueLogouts.length) return;
+    const count = overdueLogouts.length;
+    update((s) => {
+      const iso = nowRef.current.toISOString();
+      const dStr = todayStr(nowRef.current);
+      const targetIds = new Set(overdueLogouts.map((x) => x.id));
+      return {
+        ...s,
+        shifts: s.shifts.map((sh) =>
+          targetIds.has(sh.id)
+            ? { ...sh, currentState: 'done', breakKind: '', stateDate: dStr, incidentTime: '', updatedAt: iso }
+            : sh,
+        ),
+        alerts: s.alerts.map((al) =>
+          targetIds.has(al.shiftId) && !al.acknowledgedAt ? { ...al, acknowledgedAt: iso } : al,
+        ),
+      };
+    });
+    flash(`${count} operador(es) com horário vencido foram deslogados.`);
   };
 
   // Localizar inteligente: muda automaticamente para a aba certa (Presencial ou Home Office) e destaca o card
@@ -499,6 +551,7 @@ export default function App() {
         onOpen={() => setEditId(id)}
         onAck={ack}
         onQuickLog={quickLog}
+        onQuickLogout={quickLogout}
         onDropOn={(a, b) => update((s) => swapWs(s, a, b))}
       />
     );
@@ -740,6 +793,15 @@ export default function App() {
             className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
           >
             <Check size={14} strokeWidth={3} /> Dar OK nos {scheduledToLog.length} do Horário
+          </button>
+        )}
+
+        {overdueLogouts.length > 0 && (
+          <button
+            onClick={confirmAllOverdueLogouts}
+            className="flex items-center gap-1.5 rounded-md bg-rose-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-rose-700 active:scale-95 transition"
+          >
+            <Check size={14} strokeWidth={3} /> Confirmar Logout dos {overdueLogouts.length} Vencidos
           </button>
         )}
 
