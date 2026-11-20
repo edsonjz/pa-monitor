@@ -346,7 +346,7 @@ export default function App() {
   const renderCard = (id: string) => {
     const v = views.get(id);
     if (!v) return null;
-    const span = id === 'SUP-01' || id === 'SUP-02' ? '!w-[248px]' : id === 'SUP-03' || id === 'SUP-04' ? '!h-[192px]' : '';
+    const span = id === 'SUP-01' || id === 'SUP-02' ? '!w-[296px]' : id === 'SUP-03' || id === 'SUP-04' ? '!h-[224px]' : '';
     return (
       <PACard
         view={v}

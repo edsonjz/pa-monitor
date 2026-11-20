@@ -79,7 +79,7 @@ export default function PACard({
         highlight ? 'z-10 ring-4 ring-sky-500' : ''
       }`}
     >
-      <div className={`flex items-center justify-between px-1.5 py-[3px] text-[11px] font-bold ${headBg}`}>
+      <div className={`flex items-center justify-between px-2 py-1 text-[11px] font-bold ${headBg}`}>
         <span>
           {ws.code}
           {isSup ? ' — SUP' : ''}
@@ -88,24 +88,24 @@ export default function PACard({
       </div>
 
       {alert ? (
-        <div className="flex flex-1 flex-col justify-between px-1.5 py-1">
+        <div className="flex flex-1 flex-col justify-between p-1.5">
           <div className="flex items-start gap-1 font-extrabold text-[11px] leading-tight">
             <AlertTriangle size={13} className="mt-px shrink-0" />
             <span className="truncate">{EVENT_LABEL[alert.eventType]}</span>
           </div>
-          <div className="truncate text-[10px] font-semibold">
+          <div className="truncate text-[11px] font-bold">
             {alert.operatorName || '—'} · {alert.scheduledTime}
             {view.alertCount > 1 ? ` (+${view.alertCount - 1})` : ''}
           </div>
-          <div className="flex gap-1">
+          <div className="flex gap-1.5 pt-1">
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onAck(alert.id);
               }}
-              className="flex flex-1 items-center justify-center gap-1 rounded bg-white py-0.5 text-xs font-extrabold text-red-700 shadow hover:bg-red-50"
+              className="flex flex-1 items-center justify-center gap-1 rounded bg-white py-1 text-xs font-extrabold text-red-700 shadow hover:bg-red-50"
             >
-              <Check size={12} strokeWidth={3} /> OK
+              <Check size={13} strokeWidth={3} /> OK
             </button>
             <select
               value=""
@@ -115,7 +115,7 @@ export default function PACard({
               }}
               onClick={(e) => e.stopPropagation()}
               title="Atribuir Falta / Atestado / DSR"
-              className="rounded bg-white/90 px-1 py-0.5 text-[9px] font-bold text-slate-800 outline-none"
+              className="rounded bg-white/90 px-1.5 py-1 text-[10px] font-bold text-slate-800 outline-none hover:bg-white"
             >
               <option value="" disabled>Ausência</option>
               <option value="falta">🚫 Falta</option>
@@ -125,22 +125,37 @@ export default function PACard({
           </div>
         </div>
       ) : (
-        <div className="flex flex-1 flex-col justify-center gap-0.5 px-1 text-center">
-          <div className={`truncate text-[12px] font-semibold ${hasOp ? '' : 'italic opacity-70'} ${isAbsent ? 'line-through opacity-85' : ''}`}>
-            {hasOp ? shift!.operatorName : state === 'maint' ? '🔧' : 'Livre'}
+        <div className="flex flex-1 flex-col justify-between px-1.5 py-1 text-center">
+          <div>
+            <div
+              className={`truncate text-[12px] font-bold leading-tight text-slate-900 dark:text-slate-100 ${
+                hasOp ? '' : 'italic opacity-60'
+              } ${isAbsent ? 'line-through opacity-80' : ''}`}
+              title={hasOp ? shift!.operatorName : undefined}
+            >
+              {hasOp ? shift!.operatorName : state === 'maint' ? '🔧 Manutenção' : 'Livre'}
+            </div>
+            <div className="truncate text-[10.5px] font-semibold text-slate-700 dark:text-slate-200">
+              {status}
+            </div>
+            <div
+              className={`truncate text-[10px] ${
+                shift ? 'font-medium text-slate-600 dark:text-slate-400' : 'italic opacity-50'
+              }`}
+            >
+              {range}
+            </div>
           </div>
-          <div className="truncate text-[10px] font-bold">{status}</div>
-          <div className={`truncate text-[10px] ${shift ? 'font-medium' : 'italic opacity-60'}`}>{range}</div>
 
           {hasOp && isAbsent && (
-            <div className="mt-0.5 flex items-center justify-center gap-1">
+            <div className="flex items-center justify-center gap-1.5 pt-0.5">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onQuickLog(shift!.id);
                 }}
                 title="Reativar e colocar como Logado (Verde)"
-                className="rounded bg-emerald-600 px-1.5 py-0.2 text-[9px] font-bold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
+                className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
               >
                 ✓ Reativar
               </button>
@@ -152,7 +167,7 @@ export default function PACard({
                 }}
                 onClick={(e) => e.stopPropagation()}
                 title="Alterar ausência"
-                className="rounded border border-black/20 bg-white/80 px-1 py-0.2 text-[9px] font-bold text-slate-800 outline-none hover:bg-white"
+                className="rounded border border-black/20 bg-white/90 px-1.5 py-0.5 text-[10px] font-bold text-slate-800 outline-none hover:bg-white"
               >
                 <option value="" disabled>Mudar</option>
                 <option value="falta">🚫 Falta</option>
@@ -164,16 +179,16 @@ export default function PACard({
           )}
 
           {hasOp && !isAbsent && state !== 'logged' && state !== 'maint' && (
-            <div className="mt-0.5 flex items-center justify-center gap-1">
+            <div className="flex items-center justify-center gap-1.5 pt-0.5">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onQuickLog(shift!.id);
                 }}
                 title="Dar OK: confirmar presença e marcar como Logado (Verde)"
-                className="flex items-center justify-center gap-1 rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-extrabold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
+                className="flex items-center justify-center gap-1 rounded bg-emerald-600 px-2.5 py-0.5 text-[10.5px] font-extrabold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
               >
-                <Check size={11} strokeWidth={3} /> Dar OK
+                <Check size={12} strokeWidth={3} /> Dar OK
               </button>
               <select
                 value=""
@@ -183,7 +198,7 @@ export default function PACard({
                 }}
                 onClick={(e) => e.stopPropagation()}
                 title="Atribuir Falta / Atestado / DSR"
-                className="rounded border border-slate-300 bg-white/90 px-1 py-0.5 text-[9px] font-bold text-slate-700 outline-none hover:bg-white dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                className="rounded border border-slate-300 bg-white/90 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 outline-none hover:bg-white dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
               >
                 <option value="" disabled>Ausência</option>
                 <option value="falta">🚫 Falta</option>
@@ -194,9 +209,9 @@ export default function PACard({
           )}
 
           {hasOp && !isAbsent && state === 'logged' && (
-            <div className="mt-0.5 flex items-center justify-center gap-1">
-              <div className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
-                <Check size={11} strokeWidth={3} /> Logado
+            <div className="flex items-center justify-center gap-1.5 pt-0.5">
+              <div className="flex items-center gap-1 rounded bg-emerald-700/15 px-2 py-0.5 text-[10.5px] font-black text-emerald-900 dark:text-emerald-200">
+                <Check size={12} strokeWidth={3} /> Logado
               </div>
               <select
                 value=""
@@ -205,8 +220,8 @@ export default function PACard({
                   if (e.target.value) onSetState(shift!.id, e.target.value as ShiftState);
                 }}
                 onClick={(e) => e.stopPropagation()}
-                title="Atribuir Falta / Atestado / DSR"
-                className="rounded border border-emerald-400 bg-white/80 px-1 py-0.2 text-[9px] font-bold text-slate-700 outline-none hover:bg-white dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                title="Atribuir Falta / Atestado / DSR ou mudar status"
+                className="rounded border border-emerald-400 bg-white/90 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 outline-none hover:bg-white dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
               >
                 <option value="" disabled>Mudar</option>
                 <option value="falta">🚫 Falta</option>

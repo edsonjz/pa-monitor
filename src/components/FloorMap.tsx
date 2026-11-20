@@ -3,10 +3,10 @@ import { LAYOUT } from '../lib/layout';
 
 /** Mapa físico: renderCard(id, spanClass) devolve o card de cada PA. */
 export default function FloorMap({ renderCard }: { renderCard: (id: string) => ReactNode }) {
-  const W = 124; // largura do card
-  const H = 96; // altura do card
+  const W = 148; // largura do card (aumentado para nomes completos e botões)
+  const H = 112; // altura do card (layout mais espaçoso e proporcional)
   const NAVY = '#1F3864';
-  const gapV = 44; // corredor vertical
+  const gapV = 40; // corredor vertical
   const block = 'border-[3px] bg-white/40 dark:bg-slate-900/40';
   const col = (n: number) => ({ display: 'grid', gridTemplateColumns: `repeat(${n}, ${W}px)` } as const);
   const midLine = { borderLeft: `4px solid ${NAVY}` };
