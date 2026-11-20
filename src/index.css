@@ -8,14 +8,15 @@ body {
 }
 
 @layer components {
-  .pa-card { @apply relative flex h-[112px] w-[148px] flex-col overflow-hidden border border-slate-400 text-[11px] leading-tight transition-all duration-150 dark:border-slate-600; }
-  .pa-free { @apply bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300; }
-  .pa-logged { @apply bg-emerald-200 text-emerald-950 font-semibold border-emerald-500 shadow-sm dark:bg-emerald-800/80 dark:text-emerald-50 dark:border-emerald-600; }
-  .pa-break { @apply bg-amber-300 text-amber-950 dark:bg-amber-600/80 dark:text-amber-50; }
-  .pa-falta { @apply bg-rose-200 text-rose-950 font-semibold border-rose-500 shadow-sm dark:bg-rose-950/80 dark:text-rose-100 dark:border-rose-600; }
-  .pa-atestado { @apply bg-cyan-200 text-cyan-950 font-semibold border-cyan-500 shadow-sm dark:bg-cyan-950/80 dark:text-cyan-100 dark:border-cyan-600; }
-  .pa-dsr { @apply bg-purple-200 text-purple-950 font-semibold border-purple-500 shadow-sm dark:bg-purple-950/80 dark:text-purple-100 dark:border-purple-600; }
-  .pa-sup { @apply bg-[#FFE699] text-yellow-950 dark:bg-yellow-700/60 dark:text-yellow-50; }
+  .pa-card { @apply relative flex h-[104px] w-[152px] flex-col overflow-hidden border border-slate-500/80 text-[11px] leading-tight transition-shadow duration-150 hover:shadow-md dark:border-slate-600; }
+  .pa-free { @apply bg-[#F2F2F2] text-slate-600 dark:bg-slate-800 dark:text-slate-300; }
+  .pa-pending { @apply bg-[#E8EEF5] text-slate-800 dark:bg-slate-700/80 dark:text-slate-100; }
+  .pa-logged { @apply bg-[#C6EFCE] text-slate-950 dark:bg-emerald-900/80 dark:text-emerald-50; }
+  .pa-break { @apply bg-[#FFEB9C] text-amber-950 dark:bg-amber-700/80 dark:text-amber-50; }
+  .pa-falta { @apply bg-[#FFC7CE] text-rose-950 dark:bg-rose-950/80 dark:text-rose-100; }
+  .pa-atestado { @apply bg-[#B7DEE8] text-cyan-950 dark:bg-cyan-950/80 dark:text-cyan-100; }
+  .pa-dsr { @apply bg-[#E4DFEC] text-purple-950 dark:bg-purple-950/80 dark:text-purple-100; }
+  .pa-sup { @apply bg-[#FFF9E6] text-slate-900 dark:bg-yellow-900/50 dark:text-yellow-50; }
   .pa-maint { @apply bg-slate-300 text-slate-700 dark:bg-slate-700 dark:text-slate-300; background-image: repeating-linear-gradient(45deg, transparent 0 8px, rgba(0,0,0,.08) 8px 16px); }
   .pa-alert { @apply animate-alertBlink border-2 text-white; }
   .btn { @apply inline-flex items-center gap-1 rounded-md border border-white/20 bg-white/10 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40; }

@@ -3,12 +3,13 @@ import type { Snapshot } from '../types';
 import { loadSnapshot, persist, subscribeRealtime } from '../services/storageService';
 import { defaultWorkstations } from '../lib/layout';
 
-export function useStore() {
+export function useStore(enabled = true) {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<Snapshot | null>(null);
 
   const load = useCallback(async () => {
+    if (!enabled) return;
     try {
       const s = await loadSnapshot();
       ref.current = s;
@@ -21,12 +22,17 @@ export function useStore() {
         setSnap(ref.current);
       }
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) {
+      ref.current = null;
+      setSnap(null);
+      return;
+    }
     void load();
     return subscribeRealtime(() => void load());
-  }, [load]);
+  }, [enabled, load]);
 
   const update = useCallback((fn: (s: Snapshot) => Snapshot) => {
     const prev = ref.current;

@@ -3,8 +3,8 @@ import { LAYOUT } from '../lib/layout';
 
 /** Mapa físico: renderCard(id, spanClass) devolve o card de cada PA. */
 export default function FloorMap({ renderCard }: { renderCard: (id: string) => ReactNode }) {
-  const W = 148; // largura do card (aumentado para nomes completos e botões)
-  const H = 112; // altura do card (layout mais espaçoso e proporcional)
+  const W = 152; // largura do card (3 faixas proporcionais ao layout preferido)
+  const H = 104; // altura do card (24px cabeçalho + 54px corpo + 26px rodapé)
   const NAVY = '#1F3864';
   const gapV = 40; // corredor vertical
   const block = 'border-[3px] bg-white/40 dark:bg-slate-900/40';

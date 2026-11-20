@@ -1,5 +1,4 @@
 import { AlertTriangle, Check } from 'lucide-react';
-import type { ShiftState } from '../types';
 import type { WsView } from '../lib/engine';
 import { BREAK_LABEL, EVENT_LABEL, breakReturn } from '../lib/engine';
 
@@ -11,7 +10,6 @@ interface Props {
   onOpen: () => void;
   onAck: (alertId: string) => void;
   onQuickLog: (shiftId: string) => void;
-  onSetState: (shiftId: string, newState: ShiftState) => void;
   onDropOn: (fromId: string, toId: string) => void;
 }
 
@@ -23,42 +21,50 @@ export default function PACard({
   onOpen,
   onAck,
   onQuickLog,
-  onSetState,
   onDropOn,
 }: Props) {
   const { ws, shift, state, alert } = view;
   const isSup = ws.type === 'supervisor';
+  const hasOp = !!shift && !!shift.operatorName.trim();
 
-  let tone = 'pa-free';
-  if (state === 'maint') tone = 'pa-maint';
-  else if (alert) tone = 'pa-alert';
-  else if (state === 'falta') tone = 'pa-falta';
-  else if (state === 'atestado') tone = 'pa-atestado';
-  else if (state === 'dsr') tone = 'pa-dsr';
-  else if (state === 'break') tone = 'pa-break';
-  else if (state === 'logged') tone = isSup ? 'pa-sup ring-2 ring-emerald-500' : 'pa-logged';
-  else if (isSup) tone = 'pa-sup';
+  let bodyTone = 'pa-free';
+  if (state === 'maint') bodyTone = 'pa-maint';
+  else if (alert) bodyTone = 'pa-alert';
+  else if (state === 'falta') bodyTone = 'pa-falta';
+  else if (state === 'atestado') bodyTone = 'pa-atestado';
+  else if (state === 'dsr') bodyTone = 'pa-dsr';
+  else if (state === 'break') bodyTone = 'pa-break';
+  else if (state === 'logged') bodyTone = isSup ? 'pa-sup' : 'pa-logged';
+  else if (isSup) bodyTone = 'pa-sup';
+  else if (hasOp && (state === 'pending' || state === 'done')) bodyTone = 'pa-pending';
 
-  let status = 'Livre';
-  if (state === 'maint') status = 'Manutenção';
-  else if (shift) {
-    if (state === 'falta') status = '🚫 Falta';
-    else if (state === 'atestado') status = '📋 Atestado';
-    else if (state === 'dsr') status = '🏖️ DSR';
-    else if (state === 'logged') status = 'Logado';
-    else if (state === 'break' && shift.breakKind)
-      status = `${BREAK_LABEL[shift.breakKind]} · volta ${breakReturn(shift, shift.breakKind)}`;
-    else if (state === 'done') status = 'Pós-logout';
-    else status = shift.loginTime ? `Aguarda login ${shift.loginTime}` : 'Sem escala';
-  }
-  const hasOp = !!shift && !!shift.operatorName;
+  let badge: { text: string; cls: string } | null = null;
+  if (state === 'falta') badge = { text: '🚫 FALTA', cls: 'bg-rose-600 text-white' };
+  else if (state === 'atestado') badge = { text: '📋 ATESTADO', cls: 'bg-cyan-700 text-white' };
+  else if (state === 'dsr') badge = { text: '🏖️ DSR', cls: 'bg-purple-700 text-white' };
+  else if (state === 'break' && shift?.breakKind)
+    badge = {
+      text: `⏸ ${BREAK_LABEL[shift.breakKind]} · ${breakReturn(shift, shift.breakKind)}`,
+      cls: 'bg-amber-600/20 text-amber-950 dark:bg-amber-950/40 dark:text-amber-100',
+    };
+  else if (state === 'done' && hasOp)
+    badge = { text: 'Pós-logout', cls: 'bg-slate-600/20 text-slate-700 dark:text-slate-200' };
+  else if (state === 'pending' && hasOp)
+    badge = {
+      text: shift?.loginTime ? `Aguarda ${shift.loginTime}` : 'Pendente',
+      cls: 'bg-slate-500/15 text-slate-700 dark:text-slate-200',
+    };
+
   const range =
     shift && (shift.loginTime || shift.logoutTime)
-      ? `${shift.loginTime || '--:--'} – ${shift.logoutTime || '--:--'}`
-      : 'Entrada – Saída';
+      ? `${shift.loginTime || '--:--'}–${shift.logoutTime || '--:--'}`
+      : 'Entrada - Saída';
+
   const headBg = alert
-    ? 'bg-red-900 text-white'
-    : 'bg-[#D9E2F3] text-navy dark:bg-slate-700 dark:text-slate-100';
+    ? 'bg-red-900 text-white border-red-950'
+    : isSup
+      ? 'bg-[#FFE699] text-slate-900 border-amber-400/80 dark:bg-yellow-700/80 dark:text-yellow-50 dark:border-yellow-600'
+      : 'bg-[#D9E2F3] text-slate-900 border-slate-400/70 dark:bg-slate-700 dark:text-slate-100 dark:border-slate-600';
 
   const isAbsent = state === 'falta' || state === 'atestado' || state === 'dsr';
 
@@ -74,165 +80,90 @@ export default function PACard({
         if (from && from !== ws.id) onDropOn(from, ws.id);
       }}
       onClick={onOpen}
-      title={shift?.team ? `Equipe: ${shift.team}` : undefined}
-      className={`pa-card cursor-pointer ${tone} ${spanClass} ${dim ? 'opacity-25' : ''} ${
+      title={
+        hasOp
+          ? `${shift!.operatorName}${shift!.team ? ` · Equipe: ${shift!.team}` : ''} (clique para editar ou registrar Falta/Atestado/DSR)`
+          : 'Clique para atribuir operador'
+      }
+      className={`pa-card cursor-pointer ${bodyTone} ${spanClass} ${dim ? 'opacity-25' : ''} ${
         highlight ? 'z-10 ring-4 ring-sky-500' : ''
       }`}
     >
-      <div className={`flex items-center justify-between px-2 py-1 text-[11px] font-bold ${headBg}`}>
-        <span>
+      {/* FAIXA 1: CABEÇALHO FIXO (24px) */}
+      <div className={`relative flex h-[24px] shrink-0 items-center justify-center border-b px-1.5 text-[11px] font-bold ${headBg}`}>
+        <span className="truncate">
           {ws.code}
-          {isSup ? ' — SUP' : ''}
+          {isSup ? ' — SUPERVISOR' : ''}
         </span>
-        {view.count > 1 && <span className="rounded bg-black/20 px-1 text-[9px]">{view.count} turnos</span>}
+        {view.count > 1 && (
+          <span className="absolute right-1 rounded bg-black/15 px-1 text-[9px] font-extrabold">{view.count}t</span>
+        )}
       </div>
 
       {alert ? (
-        <div className="flex flex-1 flex-col justify-between p-1.5">
-          <div className="flex items-start gap-1 font-extrabold text-[11px] leading-tight">
-            <AlertTriangle size={13} className="mt-px shrink-0" />
+        /* MODO ALERTA ATIVO */
+        <div className="flex flex-1 flex-col justify-between px-1.5 py-1.5">
+          <div className="flex items-center gap-1 text-[10.5px] font-extrabold leading-tight">
+            <AlertTriangle size={12} className="shrink-0" />
             <span className="truncate">{EVENT_LABEL[alert.eventType]}</span>
           </div>
-          <div className="truncate text-[11px] font-bold">
+          <div className="truncate text-center text-[11px] font-bold">
             {alert.operatorName || '—'} · {alert.scheduledTime}
             {view.alertCount > 1 ? ` (+${view.alertCount - 1})` : ''}
           </div>
-          <div className="flex gap-1.5 pt-1">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onAck(alert.id);
-              }}
-              className="flex flex-1 items-center justify-center gap-1 rounded bg-white py-1 text-xs font-extrabold text-red-700 shadow hover:bg-red-50"
-            >
-              <Check size={13} strokeWidth={3} /> OK
-            </button>
-            <select
-              value=""
-              onChange={(e) => {
-                e.stopPropagation();
-                if (e.target.value) onSetState(shift!.id, e.target.value as ShiftState);
-              }}
-              onClick={(e) => e.stopPropagation()}
-              title="Atribuir Falta / Atestado / DSR"
-              className="rounded bg-white/90 px-1.5 py-1 text-[10px] font-bold text-slate-800 outline-none hover:bg-white"
-            >
-              <option value="" disabled>Ausência</option>
-              <option value="falta">🚫 Falta</option>
-              <option value="atestado">📋 Atestado</option>
-              <option value="dsr">🏖️ DSR</option>
-            </select>
-          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onAck(alert.id);
+            }}
+            className="flex items-center justify-center gap-1 rounded bg-white py-0.5 text-[11px] font-extrabold text-red-700 shadow hover:bg-red-50 active:scale-95"
+          >
+            <Check size={12} strokeWidth={3} /> OK
+          </button>
         </div>
       ) : (
-        <div className="flex flex-1 flex-col justify-between px-1.5 py-1 text-center">
-          <div>
+        <>
+          {/* FAIXA 2: CORPO CENTRAL (54px) */}
+          <div className="flex flex-1 flex-col items-center justify-center gap-0.5 overflow-hidden px-1.5 text-center">
             <div
-              className={`truncate text-[12px] font-bold leading-tight text-slate-900 dark:text-slate-100 ${
-                hasOp ? '' : 'italic opacity-60'
-              } ${isAbsent ? 'line-through opacity-80' : ''}`}
-              title={hasOp ? shift!.operatorName : undefined}
+              className={`line-clamp-2 w-full break-words text-[12px] leading-tight ${
+                hasOp
+                  ? `font-bold ${isSup ? 'italic' : ''} ${isAbsent ? 'line-through opacity-75' : ''}`
+                  : 'italic opacity-70'
+              }`}
             >
               {hasOp ? shift!.operatorName : state === 'maint' ? '🔧 Manutenção' : 'Livre'}
             </div>
-            <div className="truncate text-[10.5px] font-semibold text-slate-700 dark:text-slate-200">
-              {status}
-            </div>
-            <div
-              className={`truncate text-[10px] ${
-                shift ? 'font-medium text-slate-600 dark:text-slate-400' : 'italic opacity-50'
+            {badge && (
+              <span className={`max-w-full truncate rounded px-1.5 py-[1px] text-[9.5px] font-extrabold leading-tight ${badge.cls}`}>
+                {badge.text}
+              </span>
+            )}
+          </div>
+
+          {/* FAIXA 3: RODAPÉ DE HORÁRIO (26px) */}
+          <div className="flex h-[26px] shrink-0 items-center justify-center gap-1.5 border-t border-slate-300/80 bg-white px-1.5 text-[10.5px] dark:border-slate-700 dark:bg-slate-900">
+            <span
+              className={`truncate italic ${
+                shift ? 'font-bold text-slate-900 dark:text-slate-100' : 'text-slate-400 dark:text-slate-500'
               }`}
             >
               {range}
-            </div>
-          </div>
-
-          {hasOp && isAbsent && (
-            <div className="flex items-center justify-center gap-1.5 pt-0.5">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onQuickLog(shift!.id);
-                }}
-                title="Reativar e colocar como Logado (Verde)"
-                className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
-              >
-                ✓ Reativar
-              </button>
-              <select
-                value=""
-                onChange={(e) => {
-                  e.stopPropagation();
-                  if (e.target.value) onSetState(shift!.id, e.target.value as ShiftState);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                title="Alterar ausência"
-                className="rounded border border-black/20 bg-white/90 px-1.5 py-0.5 text-[10px] font-bold text-slate-800 outline-none hover:bg-white"
-              >
-                <option value="" disabled>Mudar</option>
-                <option value="falta">🚫 Falta</option>
-                <option value="atestado">📋 Atestado</option>
-                <option value="dsr">🏖️ DSR</option>
-                <option value="pending">⚪ Pendente</option>
-              </select>
-            </div>
-          )}
-
-          {hasOp && !isAbsent && state !== 'logged' && state !== 'maint' && (
-            <div className="flex items-center justify-center gap-1.5 pt-0.5">
+            </span>
+            {hasOp && state === 'pending' && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onQuickLog(shift!.id);
                 }}
                 title="Dar OK: confirmar presença e marcar como Logado (Verde)"
-                className="flex items-center justify-center gap-1 rounded bg-emerald-600 px-2.5 py-0.5 text-[10.5px] font-extrabold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
+                className="flex shrink-0 items-center gap-0.5 rounded bg-emerald-600 px-1.5 py-[2px] text-[9.5px] font-extrabold text-white shadow-sm hover:bg-emerald-700 active:scale-95"
               >
-                <Check size={12} strokeWidth={3} /> Dar OK
+                <Check size={10} strokeWidth={3} /> OK
               </button>
-              <select
-                value=""
-                onChange={(e) => {
-                  e.stopPropagation();
-                  if (e.target.value) onSetState(shift!.id, e.target.value as ShiftState);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                title="Atribuir Falta / Atestado / DSR"
-                className="rounded border border-slate-300 bg-white/90 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 outline-none hover:bg-white dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
-              >
-                <option value="" disabled>Ausência</option>
-                <option value="falta">🚫 Falta</option>
-                <option value="atestado">📋 Atestado</option>
-                <option value="dsr">🏖️ DSR</option>
-              </select>
-            </div>
-          )}
-
-          {hasOp && !isAbsent && state === 'logged' && (
-            <div className="flex items-center justify-center gap-1.5 pt-0.5">
-              <div className="flex items-center gap-1 rounded bg-emerald-700/15 px-2 py-0.5 text-[10.5px] font-black text-emerald-900 dark:text-emerald-200">
-                <Check size={12} strokeWidth={3} /> Logado
-              </div>
-              <select
-                value=""
-                onChange={(e) => {
-                  e.stopPropagation();
-                  if (e.target.value) onSetState(shift!.id, e.target.value as ShiftState);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                title="Atribuir Falta / Atestado / DSR ou mudar status"
-                className="rounded border border-emerald-400 bg-white/90 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 outline-none hover:bg-white dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
-              >
-                <option value="" disabled>Mudar</option>
-                <option value="falta">🚫 Falta</option>
-                <option value="atestado">📋 Atestado</option>
-                <option value="dsr">🏖️ DSR</option>
-                <option value="break">🟡 Pausa</option>
-                <option value="pending">⚪ Pendente</option>
-              </select>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );

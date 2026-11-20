@@ -90,19 +90,28 @@ export function detectAlerts(
       (logoutM < loginM ? nowMin >= logoutM && nowMin < loginM : nowMin >= logoutM);
 
     for (const ev of shiftEvents(s)) {
-      let isDue = due(ev.time, nowMin);
+      let isDue = false;
 
-      // 1. Alerta de login pendente: se o horário de entrada já chegou/passou hoje e o operador ainda não foi confirmado como logado (e ainda não passou da saída)
-      if (ev.type === 'login' && curState === 'pending') {
-        if (loginM !== null && nowMin >= loginM && !isPastLogout) {
-          isDue = true;
+      if (ev.type === 'login') {
+        // Só dispara login se estiver pendente e dentro da janela de trabalho (ou após o login se não houver saída)
+        if (curState === 'pending' && !isPastLogout) {
+          isDue = logoutM !== null ? inWindow(s, nowMin) : loginM !== null && nowMin >= loginM;
         }
-      }
-
-      // 2. Alerta de retorno de pausa pendente: se o operador está em pausa e já deu o horário de voltar (e ainda não passou da saída)
-      if ((ev.type === 'b1r' || ev.type === 'b60r' || ev.type === 'b2r') && curState === 'break') {
-        if (nowMin >= ev.time && !isPastLogout) {
-          isDue = true;
+      } else if (ev.type === 'b1s' || ev.type === 'b60s' || ev.type === 'b2s') {
+        // Início de pausa só dispara se o operador estiver logado e dentro da tolerância
+        if (curState === 'logged') {
+          isDue = due(ev.time, nowMin);
+        }
+      } else if (ev.type === 'b1r' || ev.type === 'b60r' || ev.type === 'b2r') {
+        // Retorno de pausa só dispara se o operador estiver em pausa e já deu o horário de voltar
+        if (curState === 'break' && !isPastLogout) {
+          const evReached = nowMin >= ev.time || (ev.time >= 1440 && nowMin + 1440 >= ev.time);
+          if (evReached) isDue = true;
+        }
+      } else if (ev.type === 'logout') {
+        // Logout só dispara se estiver logado ou em pausa e dentro da tolerância
+        if (curState === 'logged' || curState === 'break') {
+          isDue = due(ev.time, nowMin);
         }
       }
 

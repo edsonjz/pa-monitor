@@ -19,7 +19,7 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
-import type { AlertLog, Shift, ShiftState, Snapshot, Workstation } from './types';
+import type { AlertLog, Shift, Snapshot, Workstation } from './types';
 import { useStore } from './hooks/useStore';
 import { useClock } from './hooks/useClock';
 import { applyAck, buildViews, detectAlerts, effectiveState, inWindow } from './lib/engine';
@@ -62,7 +62,7 @@ function swapWs(s: Snapshot, a: string, b: string): Snapshot {
 
 export default function App() {
   const [isAuth, setIsAuth] = useState(() => isAuthenticated());
-  const { snap, ref, update, error } = useStore();
+  const { snap, ref, update, error } = useStore(isAuth);
   const clock = useClock();
   const { now } = clock;
   const nowRef = useRef(now);
@@ -91,8 +91,9 @@ export default function App() {
   const nowMin = minOfDay(now);
   const sec = Math.floor(now.getTime() / 1000);
 
-  // Motor de alertas: roda a cada segundo
+  // Motor de alertas: roda a cada segundo (apenas quando autenticado)
   useEffect(() => {
+    if (!isAuth) return;
     const s = ref.current;
     if (!s) return;
     const existing = new Set(s.alerts.map((a) => a.id));
@@ -103,7 +104,7 @@ export default function App() {
         alerts: [...cur.alerts, ...created.filter((c) => !cur.alerts.some((a) => a.id === c.id))],
       }));
     }
-  }, [sec, !!snap]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isAuth, sec, !!snap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pending = useMemo(
     () =>
@@ -121,13 +122,13 @@ export default function App() {
     [snap],
   );
 
-  // Som: bipe contínuo e suave enquanto houver alertas pendentes
+  // Som: bipe contínuo e suave enquanto houver alertas pendentes e usuário autenticado
   useEffect(() => {
-    if (!soundOn || pending.length === 0) return;
+    if (!isAuth || !soundOn || pending.length === 0) return;
     beep();
     const i = setInterval(beep, 4000);
     return () => clearInterval(i);
-  }, [soundOn, pending.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isAuth, soundOn, pending.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const views = useMemo(
     () => buildViews(snap?.workstations ?? [], snap?.shifts ?? [], pending, nowMin, today),
@@ -212,40 +213,6 @@ export default function App() {
     flash('Operador confirmado como Logado (Verde).');
   };
 
-  // Alteração de status direto (Falta, Atestado, DSR, etc.)
-  const setOperatorState = (shiftId: string, newState: ShiftState) => {
-    update((s) => {
-      const iso = nowRef.current.toISOString();
-      const today = todayStr(nowRef.current);
-      return {
-        ...s,
-        shifts: s.shifts.map((sh) =>
-          sh.id === shiftId
-            ? {
-                ...sh,
-                currentState: newState,
-                breakKind: newState === 'break' ? (sh.breakKind || 'b60') : '',
-                stateDate: today,
-                updatedAt: iso,
-              }
-            : sh,
-        ),
-        alerts: s.alerts.map((al) =>
-          al.shiftId === shiftId && !al.acknowledgedAt ? { ...al, acknowledgedAt: iso } : al,
-        ),
-      };
-    });
-    const labels: Record<string, string> = {
-      falta: 'Falta registrada (Alertas desativados)',
-      atestado: 'Atestado médico registrado (Alertas desativados)',
-      dsr: 'DSR registrado (Alertas desativados)',
-      logged: 'Operador marcado como Logado (Verde)',
-      pending: 'Operador colocado como Pendente',
-      break: 'Operador colocado em Pausa',
-    };
-    flash(labels[newState] || `Status atualizado para ${newState}.`);
-  };
-
   // Operadores que estão no horário de trabalho mas ainda não estão com status "logado"
   const scheduledToLog = useMemo(() => {
     return (snap?.shifts ?? []).filter((s) => {
@@ -293,11 +260,22 @@ export default function App() {
     update((s) => {
       const iso = new Date().toISOString();
       const kept = s.shifts.filter((x) => !removed.includes(x.id) && !list.some((l) => l.id === x.id));
+      const clearedShiftIds = new Set(
+        list
+          .filter((l) => ['logged', 'falta', 'atestado', 'dsr', 'done'].includes(l.currentState))
+          .map((l) => l.id),
+      );
       let next: Snapshot = {
         ...s,
         workstations: s.workstations.map((w) => (w.id === ws.id ? { ...ws, label: ws.code } : w)),
         shifts: [...kept, ...list.map((l) => ({ ...l, wsId: ws.id, updatedAt: iso }))],
-        alerts: s.alerts.map((a) => (a.wsId === ws.id && !a.acknowledgedAt ? { ...a, wsCode: ws.code } : a)),
+        alerts: s.alerts.map((a) => {
+          if (a.acknowledgedAt) return a;
+          if (clearedShiftIds.has(a.shiftId)) {
+            return { ...a, wsCode: ws.code, acknowledgedAt: iso };
+          }
+          return a.wsId === ws.id ? { ...a, wsCode: ws.code } : a;
+        }),
       };
       if (moveTo) next = swapWs(next, ws.id, moveTo);
       return next;
@@ -346,7 +324,7 @@ export default function App() {
   const renderCard = (id: string) => {
     const v = views.get(id);
     if (!v) return null;
-    const span = id === 'SUP-01' || id === 'SUP-02' ? '!w-[296px]' : id === 'SUP-03' || id === 'SUP-04' ? '!h-[224px]' : '';
+    const span = id === 'SUP-01' || id === 'SUP-02' ? '!w-[304px]' : id === 'SUP-03' || id === 'SUP-04' ? '!h-[208px]' : '';
     return (
       <PACard
         view={v}
@@ -356,7 +334,6 @@ export default function App() {
         onOpen={() => setEditId(id)}
         onAck={ack}
         onQuickLog={quickLog}
-        onSetState={setOperatorState}
         onDropOn={(a, b) => update((s) => swapWs(s, a, b))}
       />
     );
@@ -522,7 +499,7 @@ export default function App() {
         <div className="relative">
           <Search size={14} className="absolute left-2 top-2.5 text-slate-400" />
           <input
-            className="input !w-52 !pl-7"
+            className="input !w-64 !pl-7"
             placeholder="Buscar nome ou código da PA"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -551,13 +528,13 @@ export default function App() {
           ))}
         </select>
         <div className="ml-1 flex flex-wrap items-center gap-2.5 text-[11px]">
-          <Legend c="bg-emerald-300 border-emerald-500" t="Logado" />
-          <Legend c="bg-amber-300 border-amber-500" t="Pausa" />
-          <Legend c="bg-rose-300 border-rose-500" t="Falta" />
-          <Legend c="bg-cyan-300 border-cyan-500" t="Atestado" />
-          <Legend c="bg-purple-300 border-purple-500" t="DSR" />
-          <Legend c="bg-slate-200 border-slate-400" t="Livre" />
-          <Legend c="bg-[#FFE699] border-yellow-500" t="Supervisor" />
+          <Legend c="bg-[#C6EFCE] border-slate-500" t="Logado" />
+          <Legend c="bg-[#FFEB9C] border-amber-500" t="Pausa" />
+          <Legend c="bg-[#FFC7CE] border-rose-500" t="Falta" />
+          <Legend c="bg-[#B7DEE8] border-cyan-500" t="Atestado" />
+          <Legend c="bg-[#E4DFEC] border-purple-500" t="DSR" />
+          <Legend c="bg-[#F2F2F2] border-slate-400" t="Livre" />
+          <Legend c="bg-[#FFE699] border-amber-400" t="Supervisor" />
           <Legend c="bg-red-500 border-red-700" t="Alerta" />
         </div>
         {msg && <span className="ml-auto text-xs font-semibold text-emerald-700 dark:text-emerald-300">{msg}</span>}
