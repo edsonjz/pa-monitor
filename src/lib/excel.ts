@@ -50,8 +50,20 @@ const statusLabel = (s: Shift): string => {
   }
 };
 
+const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+const MAX_IMPORT_ROWS = 2000;
+const ALLOWED_EXT = /\.(xlsx|xls|csv)$/i;
+
+function sanitizeCell(value: string | number): string | number {
+  if (typeof value === 'string' && /^[\s]*[=+\-@\t\r]/.test(value)) {
+    return `'${value}`;
+  }
+  return value;
+}
+
 function save(rows: (string | number)[][], name: string, sheet: string) {
-  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const safeRows = rows.map((r) => r.map(sanitizeCell));
+  const ws = XLSX.utils.aoa_to_sheet(safeRows);
   ws['!cols'] = HEAD.map((h) => ({ wch: Math.max(12, h.length + 2) }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheet);
@@ -124,9 +136,21 @@ export interface ImportResult {
 }
 
 export async function parseImport(file: File, wss: Workstation[]): Promise<ImportResult> {
-  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
+  if (!ALLOWED_EXT.test(file.name)) {
+    throw new Error('Formato inválido. Envie um arquivo .xlsx, .xls ou .csv.');
+  }
+  if (file.size > MAX_IMPORT_BYTES) {
+    throw new Error('Arquivo excede o limite máximo de 5 MB.');
+  }
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', sheetRows: MAX_IMPORT_ROWS + 2 });
+  const sheet = wb.SheetNames.length ? wb.Sheets[wb.SheetNames[0]] : undefined;
+  if (!sheet) {
+    throw new Error('Planilha vazia ou inválida.');
+  }
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+  if (rows.length > MAX_IMPORT_ROWS) {
+    throw new Error(`A planilha excede o limite de ${MAX_IMPORT_ROWS} linhas.`);
+  }
   const byCode = new Map(wss.map((w) => [normCode(w.code), w]));
   const shifts: Shift[] = [];
   const affected = new Set<string>();

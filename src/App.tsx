@@ -29,10 +29,9 @@ import { useClock } from './hooks/useClock';
 import { applyAck, buildViews, detectAlerts, effectiveState, inWindow, isIncidentState, isPastShiftLogout } from './lib/engine';
 import { fmtClock, minOfDay, todayStr } from './lib/time';
 import { beep } from './lib/sound';
-import { downloadTemplate, exportCurrent, parseImport } from './lib/excel';
 import { defaultWorkstations, hoNumber, isHomeOfficeWs, makeHomeOfficeWs } from './lib/layout';
 import { storageMode, syncLocalToSupabase } from './services/storageService';
-import { isAuthenticated, logout } from './services/authService';
+import { type AuthUser, getInitialAuthUser, logout, subscribeAuthState } from './services/authService';
 import FloorMap from './components/FloorMap';
 import HomeOfficeGrid from './components/HomeOfficeGrid';
 import PACard from './components/PACard';
@@ -78,9 +77,29 @@ function swapWs(s: Snapshot, a: string, b: string): Snapshot {
 }
 
 export default function App() {
-  const [isAuth, setIsAuth] = useState(() => isAuthenticated());
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const isAuth = authUser !== null;
   const { snap, ref, update, error } = useStore(isAuth);
   const clock = useClock();
+
+  useEffect(() => {
+    let active = true;
+    void getInitialAuthUser().then((u) => {
+      if (!active) return;
+      setAuthUser(u);
+      setAuthLoading(false);
+    });
+    const unsub = subscribeAuthState((u) => {
+      if (!active) return;
+      setAuthUser(u);
+      setAuthLoading(false);
+    });
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, []);
   const { now } = clock;
   const nowRef = useRef(now);
   nowRef.current = now;
@@ -492,6 +511,7 @@ export default function App() {
 
   const onImport = async (f: File) => {
     try {
+      const { parseImport } = await import('./lib/excel');
       const r = await parseImport(f, ref.current!.workstations);
       if (
         !window.confirm(
@@ -557,9 +577,17 @@ export default function App() {
     );
   };
 
-  // Se não estiver autenticado, exibe tela de login de Administrador Geral
-  if (!isAuth) {
-    return <LoginScreen onSuccess={() => setIsAuth(true)} />;
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#071326] text-sm font-medium text-sky-200">
+        Verificando sessão…
+      </div>
+    );
+  }
+
+  // Se não estiver autenticado, exibe tela de login
+  if (!authUser) {
+    return <LoginScreen onSuccess={(u) => setAuthUser(u)} />;
   }
 
   if (!snap) return <div className="p-10 text-center text-slate-500">Carregando…</div>;
@@ -717,10 +745,24 @@ export default function App() {
           <button className="btn" onClick={() => fileRef.current?.click()}>
             <Upload size={14} /> Importar Excel
           </button>
-          <button className="btn" onClick={() => downloadTemplate(snap.workstations)}>
+          <button
+            className="btn"
+            onClick={() => {
+              void import('./lib/excel')
+                .then(({ downloadTemplate }) => downloadTemplate(snap.workstations))
+                .catch((e) => flash('Erro ao gerar planilha: ' + (e as Error).message));
+            }}
+          >
             <FileSpreadsheet size={14} /> Planilha Modelo (.xlsx)
           </button>
-          <button className="btn" onClick={() => exportCurrent(snap.workstations, snap.shifts)}>
+          <button
+            className="btn"
+            onClick={() => {
+              void import('./lib/excel')
+                .then(({ exportCurrent }) => exportCurrent(snap.workstations, snap.shifts))
+                .catch((e) => flash('Erro ao exportar planilha: ' + (e as Error).message));
+            }}
+          >
             <Download size={14} /> Exportar Escala (.xlsx)
           </button>
           <button className="btn" onClick={() => setSoundOn((v) => !v)} title="Som dos alertas">
@@ -735,13 +777,16 @@ export default function App() {
 
           {/* Indicador de Usuário e Botão de Logout */}
           <div className="ml-2 flex items-center gap-1 border-l border-white/20 pl-2">
-            <span className="flex items-center gap-1 rounded bg-white/15 px-2 py-1 text-xs font-bold text-sky-200">
-              <UserCheck size={14} className="text-emerald-400" /> adm156
+            <span
+              title={authUser.email}
+              className="flex max-w-[160px] items-center gap-1 rounded bg-white/15 px-2 py-1 text-xs font-bold text-sky-200"
+            >
+              <UserCheck size={14} className="shrink-0 text-emerald-400" />
+              <span className="truncate">{authUser.displayName}</span>
             </span>
             <button
               onClick={() => {
-                logout();
-                setIsAuth(false);
+                void logout().finally(() => setAuthUser(null));
               }}
               title="Encerrar sessão"
               className="btn !bg-rose-600/80 hover:!bg-rose-700"
@@ -901,6 +946,12 @@ export default function App() {
           syncing={syncing}
           message={msg}
           onSync={async () => {
+            if (
+              !window.confirm(
+                'Enviar os dados salvos no localStorage deste navegador para o Supabase? Registros com o mesmo ID serão sobrescritos.',
+              )
+            )
+              return;
             setSyncing(true);
             try {
               const n = await syncLocalToSupabase();
@@ -922,7 +973,10 @@ export default function App() {
             flash('Exemplos removidos.');
           }}
           onReset={() => {
-            if (!window.confirm('Apagar TODOS os operadores e logs? (o layout das PAs é mantido)')) return;
+            const typed = window.prompt(
+              'Ação destrutiva! Isso apagará TODOS os operadores e logs do banco.\nDigite APAGAR para confirmar:',
+            );
+            if (typed?.trim().toUpperCase() !== 'APAGAR') return;
             update((s) => ({
               workstations: s.workstations.length ? s.workstations : defaultWorkstations(),
               shifts: [],
