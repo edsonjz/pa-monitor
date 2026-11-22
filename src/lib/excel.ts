@@ -1,8 +1,9 @@
 import * as XLSX from 'xlsx';
 import type { Shift, Workstation } from '../types';
+import { shiftCycleDate } from './engine';
 import { hoId, hoNumber, isHomeOfficeWs, makeHomeOfficeWs } from './layout';
 import { emptyShift } from './seed';
-import { parseTimeCell } from './time';
+import { fmtClock, minOfDay, parseTimeCell, todayStr } from './time';
 
 const HEAD = [
   'Código PA',
@@ -112,7 +113,7 @@ export function exportCurrent(wss: Workstation[], shifts: Shift[]) {
       ]),
     );
   }
-  save([HEAD, ...rows], `escala-atual-${new Date().toISOString().slice(0, 10)}.xlsx`, 'Escala');
+  save([HEAD, ...rows], `escala-atual-${todayStr(new Date())}.xlsx`, 'Escala');
 }
 
 const norm = (k: string) =>
@@ -131,6 +132,7 @@ const normCode = (c: string) => {
 export interface ImportResult {
   shifts: Shift[];
   affectedWs: Set<string>;
+  emptyWs: Set<string>;
   newWorkstations: Workstation[];
   warnings: string[];
 }
@@ -154,9 +156,13 @@ export async function parseImport(file: File, wss: Workstation[]): Promise<Impor
   const byCode = new Map(wss.map((w) => [normCode(w.code), w]));
   const shifts: Shift[] = [];
   const affected = new Set<string>();
+  const emptyWs = new Set<string>();
   const newWorkstations: Workstation[] = [];
   const warnings: string[] = [];
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = todayStr(now);
+  const nowMin = minOfDay(now);
+  const nowHHMM = fmtClock(now).slice(0, 5);
 
   let nextHoNum = wss.reduce((m, w) => (isHomeOfficeWs(w) ? Math.max(m, hoNumber(w.id)) : m), 0) + 1;
   const usedHoIds = new Set<string>();
@@ -188,7 +194,7 @@ export async function parseImport(file: File, wss: Workstation[]): Promise<Impor
     let ws = byCode.get(normalized);
 
     if (!name && times.every((t) => !t)) {
-      if (ws) affected.add(ws.id);
+      if (ws) emptyWs.add(ws.id);
       return;
     }
 
@@ -236,13 +242,13 @@ export async function parseImport(file: File, wss: Workstation[]): Promise<Impor
       detectedState = 'ferias';
     } else if (statusVal.includes('internet') || obsVal.includes('sem internet')) {
       detectedState = 'no_internet';
-      incidentTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      incidentTime = nowHHMM;
     } else if (statusVal.includes('energia') || obsVal.includes('sem energia')) {
       detectedState = 'no_power';
-      incidentTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      incidentTime = nowHHMM;
     } else if (statusVal.includes('tecnic') || statusVal.includes('(ti)') || obsVal.includes('problema tecnic')) {
       detectedState = 'tech_issue';
-      incidentTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      incidentTime = nowHHMM;
     } else if (statusVal.includes('pausa')) {
       detectedState = 'break';
     } else if (statusVal.includes('logad')) {
@@ -250,7 +256,8 @@ export async function parseImport(file: File, wss: Workstation[]): Promise<Impor
     }
 
     affected.add(ws.id);
-    shifts.push({
+    emptyWs.delete(ws.id);
+    const shift: Shift = {
       ...emptyShift(ws.id, String(r['turno'] ?? '').trim() || 'Manhã'),
       operatorName: name,
       team: String(r['equipesupervisor'] ?? '').trim(),
@@ -261,9 +268,13 @@ export async function parseImport(file: File, wss: Workstation[]): Promise<Impor
       logoutTime: times[4],
       notes: String(r['observacoes'] ?? '').trim(),
       currentState: detectedState,
-      stateDate: detectedState !== 'pending' ? todayStr : '',
+      stateDate: '',
       incidentTime,
-    });
+    };
+    if (detectedState !== 'pending') {
+      shift.stateDate = shiftCycleDate(shift, today, nowMin);
+    }
+    shifts.push(shift);
   });
-  return { shifts, affectedWs: affected, newWorkstations, warnings };
+  return { shifts, affectedWs: affected, emptyWs, newWorkstations, warnings };
 }

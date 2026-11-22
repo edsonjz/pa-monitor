@@ -18,6 +18,13 @@ export const fmtClock = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())
 
 export const todayStr = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
+export function addDaysStr(yyyyMmDd: string, deltaDays: number): string {
+  const [y, m, d] = yyyyMmDd.split('-').map(Number);
+  if (!y || !m || !d) return yyyyMmDd;
+  const dt = new Date(y, m - 1, d + deltaDays);
+  return todayStr(dt);
+}
+
 export const minOfDay = (d: Date) => d.getHours() * 60 + d.getMinutes();
 
 /** Converte célula do Excel (número fracionário, texto "8:00", "08h00"...) para HH:MM. */

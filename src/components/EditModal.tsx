@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import { ArrowRightLeft, Building2, Check, Home, Plus, Trash2, X, Zap } from 'lucide-react';
 import type { Shift, WsStatus, WsType, Workstation } from '../types';
-import { isIncidentState } from '../lib/engine';
+import { isIncidentState, shiftCycleDate } from '../lib/engine';
 import { hoNumber, isHomeOfficeWs } from '../lib/layout';
 import { emptyShift } from '../lib/seed';
+import { fmtClock, minOfDay, todayStr } from '../lib/time';
 
 interface Props {
   ws: Workstation;
   shifts: Shift[];
   allWs: Workstation[];
   occupiedWsIds: Set<string>;
+  today: string;
+  getNow: () => Date;
   onClose: () => void;
   onSave: (ws: Workstation, shifts: Shift[], removedIds: string[], moveTo: string) => string | null;
 }
@@ -27,11 +30,6 @@ const addMin = (t: string, m: number) => {
   if (!x) return '';
   const v = (+x[1] * 60 + +x[2] + m) % 1440;
   return `${String(Math.floor(v / 60)).padStart(2, '0')}:${String(v % 60).padStart(2, '0')}`;
-};
-
-const nowHHMM = () => {
-  const d = new Date();
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
 const QUICK_STATES: {
@@ -57,7 +55,7 @@ const INCIDENT_STATES: {
   { state: 'tech_issue', label: '💻 Problema Técnico (TI)' },
 ];
 
-export default function EditModal({ ws, shifts, allWs, occupiedWsIds, onClose, onSave }: Props) {
+export default function EditModal({ ws, shifts, allWs, occupiedWsIds, today, getNow, onClose, onSave }: Props) {
   const [code, setCode] = useState(ws.code);
   const [type, setType] = useState<WsType>(ws.type);
   const [status, setStatus] = useState<WsStatus>(ws.status);
@@ -73,13 +71,19 @@ export default function EditModal({ ws, shifts, allWs, occupiedWsIds, onClose, o
     (w) => w.id !== ws.id && !isHomeOfficeWs(w) && w.type === 'operator' && w.status === 'active' && !occupiedWsIds.has(w.id),
   );
   const freeIds = new Set([...freeHO.map((w) => w.id), ...freePresencial.map((w) => w.id)]);
-  const otherWs = allWs.filter((w) => w.id !== ws.id && !freeIds.has(w.id));
+  const otherWs = allWs.filter((w) => w.id !== ws.id && w.status !== 'maintenance' && !freeIds.has(w.id));
 
   const [quickPresencialId, setQuickPresencialId] = useState(freePresencial[0]?.id ?? '');
 
-  const todayStr = new Date().toISOString().slice(0, 10);
   const patch = (id: string, p: Partial<Shift>) => setList((l) => l.map((s) => (s.id === id ? { ...s, ...p } : s)));
   const labels = ['Manhã', 'Tarde', 'Noite'];
+
+  const getCurrentHHMM = () => fmtClock(getNow()).slice(0, 5);
+  const getStateDateFor = (s: Shift, state: Shift['currentState']) => {
+    if (state === 'pending') return '';
+    const d = getNow();
+    return shiftCycleDate(s, todayStr(d), minOfDay(d));
+  };
 
   const saveList = (targetList: Shift[], targetMoveTo = moveTo) => {
     const removed = shifts.filter((o) => !targetList.some((s) => s.id === o.id)).map((s) => s.id);
@@ -94,7 +98,7 @@ export default function EditModal({ ws, shifts, allWs, occupiedWsIds, onClose, o
 
   /** Ação rápida de 1 clique: atualiza o status do turno, salva no Supabase e fecha o modal. */
   const quickApplyAndSave = (shiftId: string, newState: Shift['currentState']) => {
-    const hhmm = nowHHMM();
+    const hhmm = getCurrentHHMM();
     const nextList: Shift[] = list.map((s) => {
       if (s.id !== shiftId) return s;
       const breakKind: Shift['breakKind'] = newState === 'break' ? s.breakKind || 'b60' : '';
@@ -103,7 +107,7 @@ export default function EditModal({ ws, shifts, allWs, occupiedWsIds, onClose, o
         ...s,
         currentState: newState,
         breakKind,
-        stateDate: newState === 'pending' ? '' : todayStr,
+        stateDate: getStateDateFor(s, newState),
         incidentTime,
       };
     });
@@ -249,100 +253,106 @@ export default function EditModal({ ws, shifts, allWs, occupiedWsIds, onClose, o
           </p>
         )}
 
-        {list.map((s) => (
-          <div key={s.id} className="mb-3 rounded-lg border border-slate-300 p-3 dark:border-slate-700">
-            {/* BARRA DE AÇÃO RÁPIDA (1 CLIQUE — SALVA E FECHA) */}
-            <div className="mb-3 space-y-2 rounded-lg border border-sky-200 bg-sky-50/70 p-2.5 dark:border-sky-900 dark:bg-sky-950/40">
-              <div className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-sky-800 dark:text-sky-300">
-                <Zap size={13} /> Ação Rápida (1 Clique — Salva e Fecha)
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {QUICK_STATES.map((q) => {
-                  const active = s.currentState === q.state && (q.state === 'pending' || s.stateDate === todayStr);
-                  return (
-                    <button
-                      key={q.state}
-                      type="button"
-                      onClick={() => quickApplyAndSave(s.id, q.state)}
-                      className={`flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold shadow-sm transition active:scale-95 ${q.cls} ${
-                        active ? 'ring-2 ring-slate-900 ring-offset-1 dark:ring-white' : ''
-                      }`}
-                    >
-                      {q.state === 'logged' && <Check size={13} strokeWidth={3} />}
-                      {q.label}
-                    </button>
-                  );
-                })}
-              </div>
+        <datalist id="turnos">
+          {labels.map((l) => (
+            <option key={l} value={l} />
+          ))}
+        </datalist>
 
-              {/* OCORRÊNCIAS REMOTAS (LARANJA + HISTÓRICO) */}
-              <div className="border-t border-sky-200/80 pt-2 dark:border-sky-900/80">
-                <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-orange-700 dark:text-orange-300">
-                  Ocorrências Remotas / Home Office (destaca em laranja e registra no histórico)
+        {list.map((s) => {
+          const cycleDate = shiftCycleDate(s, today, minOfDay(getNow()));
+          return (
+            <div key={s.id} className="mb-3 rounded-lg border border-slate-300 p-3 dark:border-slate-700">
+              {/* BARRA DE AÇÃO RÁPIDA (1 CLIQUE — SALVA E FECHA) */}
+              <div className="mb-3 space-y-2 rounded-lg border border-sky-200 bg-sky-50/70 p-2.5 dark:border-sky-900 dark:bg-sky-950/40">
+                <div className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-sky-800 dark:text-sky-300">
+                  <Zap size={13} /> Ação Rápida (1 Clique — Salva e Fecha)
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {INCIDENT_STATES.map((inc) => {
-                    const active = s.currentState === inc.state && s.stateDate === todayStr;
+                  {QUICK_STATES.map((q) => {
+                    const active =
+                      s.currentState === q.state &&
+                      (q.state === 'pending' || s.stateDate === cycleDate || s.stateDate === today);
                     return (
                       <button
-                        key={inc.state}
+                        key={q.state}
                         type="button"
-                        onClick={() => quickApplyAndSave(s.id, inc.state)}
-                        className={`flex items-center gap-1 rounded-md bg-orange-500 px-2.5 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-orange-600 active:scale-95 ${
+                        onClick={() => quickApplyAndSave(s.id, q.state)}
+                        className={`flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold shadow-sm transition active:scale-95 ${q.cls} ${
                           active ? 'ring-2 ring-slate-900 ring-offset-1 dark:ring-white' : ''
                         }`}
                       >
-                        {inc.label}
+                        {q.state === 'logged' && <Check size={13} strokeWidth={3} />}
+                        {q.label}
                       </button>
                     );
                   })}
                 </div>
-              </div>
-            </div>
 
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <div className="col-span-2">
-                <span className="label">Nome</span>
-                <input
-                  className="input"
-                  value={s.operatorName}
-                  onChange={(e) => patch(s.id, { operatorName: e.target.value })}
-                />
-              </div>
-              <div>
-                <span className="label">Equipe / Supervisor</span>
-                <input className="input" value={s.team} onChange={(e) => patch(s.id, { team: e.target.value })} />
-              </div>
-              <div>
-                <span className="label">Turno</span>
-                <input
-                  className="input"
-                  list="turnos"
-                  value={s.shiftLabel}
-                  onChange={(e) => patch(s.id, { shiftLabel: e.target.value })}
-                />
-                <datalist id="turnos">
-                  {labels.map((l) => (
-                    <option key={l} value={l} />
-                  ))}
-                </datalist>
+                {/* OCORRÊNCIAS REMOTAS (LARANJA + HISTÓRICO) */}
+                <div className="border-t border-sky-200/80 pt-2 dark:border-sky-900/80">
+                  <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-orange-700 dark:text-orange-300">
+                    Ocorrências Remotas / Home Office (destaca em laranja e registra no histórico)
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {INCIDENT_STATES.map((inc) => {
+                      const active =
+                        s.currentState === inc.state && (s.stateDate === cycleDate || s.stateDate === today);
+                      return (
+                        <button
+                          key={inc.state}
+                          type="button"
+                          onClick={() => quickApplyAndSave(s.id, inc.state)}
+                          className={`flex items-center gap-1 rounded-md bg-orange-500 px-2.5 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-orange-600 active:scale-95 ${
+                            active ? 'ring-2 ring-slate-900 ring-offset-1 dark:ring-white' : ''
+                          }`}
+                        >
+                          {inc.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
-              <div className={isIncidentState(s.currentState) ? 'col-span-2 sm:col-span-3' : 'col-span-2 sm:col-span-4'}>
-                <span className="label">Status do Operador (ao salvar manualmente)</span>
-                <select
-                  className="input font-semibold"
-                  value={s.currentState}
-                  onChange={(e) => {
-                    const nextState = e.target.value as Shift['currentState'];
-                    patch(s.id, {
-                      currentState: nextState,
-                      stateDate: nextState === 'pending' ? '' : todayStr,
-                      breakKind: nextState === 'break' ? s.breakKind || 'b60' : '',
-                      incidentTime: isIncidentState(nextState) ? s.incidentTime || nowHHMM() : '',
-                    });
-                  }}
-                >
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="col-span-2">
+                  <span className="label">Nome</span>
+                  <input
+                    className="input"
+                    value={s.operatorName}
+                    onChange={(e) => patch(s.id, { operatorName: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <span className="label">Equipe / Supervisor</span>
+                  <input className="input" value={s.team} onChange={(e) => patch(s.id, { team: e.target.value })} />
+                </div>
+                <div>
+                  <span className="label">Turno</span>
+                  <input
+                    className="input"
+                    list="turnos"
+                    value={s.shiftLabel}
+                    onChange={(e) => patch(s.id, { shiftLabel: e.target.value })}
+                  />
+                </div>
+
+                <div className={isIncidentState(s.currentState) ? 'col-span-2 sm:col-span-3' : 'col-span-2 sm:col-span-4'}>
+                  <span className="label">Status do Operador (ao salvar manualmente)</span>
+                  <select
+                    className="input font-semibold"
+                    value={s.currentState}
+                    onChange={(e) => {
+                      const nextState = e.target.value as Shift['currentState'];
+                      patch(s.id, {
+                        currentState: nextState,
+                        stateDate: getStateDateFor(s, nextState),
+                        breakKind: nextState === 'break' ? s.breakKind || 'b60' : '',
+                        incidentTime: isIncidentState(nextState) ? s.incidentTime || getCurrentHHMM() : '',
+                      });
+                    }}
+                  >
                   <option value="logged">🟢 Logado (Verde)</option>
                   <option value="break">🟡 Em Pausa (Amarelo)</option>
                   <option value="falta">🚫 Falta (Ausente)</option>
@@ -394,16 +404,17 @@ export default function EditModal({ ws, shifts, allWs, occupiedWsIds, onClose, o
                 <input className="input" value={s.notes} onChange={(e) => patch(s.id, { notes: e.target.value })} />
               </div>
             </div>
-            <div className="mt-2 text-right">
-              <button
-                className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700"
-                onClick={() => setList((l) => l.filter((x) => x.id !== s.id))}
-              >
-                <Trash2 size={14} /> Excluir operador
-              </button>
+              <div className="mt-2 text-right">
+                <button
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700"
+                  onClick={() => setList((l) => l.filter((x) => x.id !== s.id))}
+                >
+                  <Trash2 size={14} /> Excluir operador
+                </button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {err && <p className="mt-2 text-sm font-semibold text-red-600">{err}</p>}
         <div className="mt-4 flex justify-end gap-2">

@@ -5,6 +5,7 @@ import { isSupabaseConfigured, supabase } from './supabaseClient';
 
 const KEY = 'pa-monitor-v1';
 export const storageMode: 'local' | 'supabase' = isSupabaseConfigured ? 'supabase' : 'local';
+export type RealtimeStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
 /* ---------------- localStorage ---------------- */
 export function readLocal(): Snapshot | null {
@@ -81,10 +82,18 @@ async function must<T>(p: PromiseLike<{ data: T; error: { message: string } | nu
 
 async function loadRemote(): Promise<Snapshot> {
   const db = supabase!;
+  const cutoffIso = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
   const [w, sh, al] = await Promise.all([
     must(db.from('workstations').select('*')),
     must(db.from('operator_shifts').select('*')),
-    must(db.from('alert_logs').select('*').order('created_at', { ascending: true })),
+    must(
+      db
+        .from('alert_logs')
+        .select('*')
+        .or(`acknowledged_at.is.null,created_at.gte.${cutoffIso}`)
+        .order('created_at', { ascending: false })
+        .limit(500),
+    ),
   ]);
   let workstations = (w as Row[]).map(wsFromRow);
   if (workstations.length === 0) {
@@ -99,7 +108,11 @@ async function loadRemote(): Promise<Snapshot> {
       await must(db.from('workstations').upsert(added.map(wsToRow)));
     }
   }
-  return { workstations, shifts: (sh as Row[]).map(shiftFromRow), alerts: (al as Row[]).map(alertFromRow) };
+  return {
+    workstations,
+    shifts: (sh as Row[]).map(shiftFromRow),
+    alerts: (al as Row[]).map(alertFromRow).reverse(),
+  };
 }
 
 /* ---------------- API pública ---------------- */
@@ -138,9 +151,16 @@ export async function persist(prev: Snapshot, next: Snapshot): Promise<void> {
   await Promise.all(ops);
 }
 
-export function subscribeRealtime(onChange: () => void): () => void {
-  if (storageMode !== 'supabase') return () => {};
+export function subscribeRealtime(
+  onChange: () => void,
+  onStatus?: (status: RealtimeStatus) => void,
+): () => void {
+  if (storageMode !== 'supabase') {
+    onStatus?.('idle');
+    return () => {};
+  }
   const db = supabase!;
+  onStatus?.('connecting');
   let t: ReturnType<typeof setTimeout> | undefined;
   const cb = () => {
     clearTimeout(t);
@@ -150,9 +170,15 @@ export function subscribeRealtime(onChange: () => void): () => void {
   ['workstations', 'operator_shifts', 'alert_logs'].forEach((table) =>
     ch.on('postgres_changes', { event: '*', schema: 'public', table }, cb),
   );
-  ch.subscribe();
+  ch.subscribe((status) => {
+    if (status === 'SUBSCRIBED') onStatus?.('connected');
+    else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+      onStatus?.('error');
+    }
+  });
   return () => {
     clearTimeout(t);
+    onStatus?.('idle');
     void db.removeChannel(ch);
   };
 }

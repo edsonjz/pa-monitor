@@ -62,6 +62,11 @@ alter table public.alert_logs
 
 create index if not exists idx_shifts_ws on public.operator_shifts(workstation_id);
 create index if not exists idx_alerts_pending on public.alert_logs(acknowledged_at);
+create index if not exists idx_alerts_unacked
+  on public.alert_logs (created_at desc)
+  where acknowledged_at is null;
+create index if not exists idx_alerts_created_desc
+  on public.alert_logs (created_at desc);
 
 -- ---------------------------------------------------------------------
 -- Auditoria automática no servidor (SECURITY INVOKER)

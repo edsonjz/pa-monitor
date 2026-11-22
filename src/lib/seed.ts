@@ -1,7 +1,10 @@
 import type { Shift } from '../types';
 import { fmtMin, minOfDay, todayStr } from './time';
 
-export const uid = (p = 'sh') => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+export const uid = (p = 'sh') =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? `${p}-${crypto.randomUUID()}`
+    : `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 9)}`;
 
 export const emptyShift = (wsId: string, label = 'Manhã'): Shift => ({
   id: uid(),

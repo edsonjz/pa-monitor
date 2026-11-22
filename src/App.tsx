@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Building2,
   Check,
@@ -26,7 +26,7 @@ import {
 import type { AlertLog, Shift, Snapshot, Workstation } from './types';
 import { useStore } from './hooks/useStore';
 import { useClock } from './hooks/useClock';
-import { applyAck, buildViews, detectAlerts, effectiveState, inWindow, isIncidentState, isPastShiftLogout } from './lib/engine';
+import { applyAck, buildViews, detectAlerts, effectiveState, inWindow, isIncidentState, isPastShiftLogout, shiftCycleDate } from './lib/engine';
 import { fmtClock, minOfDay, todayStr } from './lib/time';
 import { beep } from './lib/sound';
 import { defaultWorkstations, hoNumber, isHomeOfficeWs, makeHomeOfficeWs } from './lib/layout';
@@ -80,8 +80,8 @@ export default function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const isAuth = authUser !== null;
-  const { snap, ref, update, error } = useStore(isAuth);
   const clock = useClock();
+  const { snap, ref, update, error, realtimeStatus } = useStore(isAuth, clock.simOn);
 
   useEffect(() => {
     let active = true;
@@ -103,6 +103,19 @@ export default function App() {
   const { now } = clock;
   const nowRef = useRef(now);
   nowRef.current = now;
+  const getNow = useCallback(() => nowRef.current, []);
+
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const locateScrollTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const locateClearTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    return () => {
+      clearTimeout(flashTimerRef.current);
+      clearTimeout(locateScrollTimerRef.current);
+      clearTimeout(locateClearTimerRef.current);
+    };
+  }, []);
 
   const [tab, setTab] = useState<ViewTab>('presencial');
   const [dark, setDark] = useState(() => localStorage.getItem('pa-dark') === '1');
@@ -231,8 +244,9 @@ export default function App() {
   }, [views]);
 
   const flash = (m: string) => {
+    clearTimeout(flashTimerRef.current);
     setMsg(m);
-    setTimeout(() => setMsg(''), 6000);
+    flashTimerRef.current = setTimeout(() => setMsg(''), 6000);
   };
 
   // Confirmação de alerta individual
@@ -240,11 +254,16 @@ export default function App() {
     update((s) => {
       const a = s.alerts.find((x) => x.id === id);
       if (!a || a.acknowledgedAt) return s;
-      const iso = nowRef.current.toISOString();
+      const curNow = nowRef.current;
+      const iso = curNow.toISOString();
+      const dStr = todayStr(curNow);
+      const nowM = minOfDay(curNow);
       return {
         ...s,
         alerts: s.alerts.map((x): AlertLog => (x.id === id ? { ...x, acknowledgedAt: iso } : x)),
-        shifts: s.shifts.map((sh) => (sh.id === a.shiftId ? applyAck(sh, a.eventType, todayStr(nowRef.current), iso) : sh)),
+        shifts: s.shifts.map((sh) =>
+          sh.id === a.shiftId ? applyAck(sh, a.eventType, shiftCycleDate(sh, dStr, nowM), iso) : sh,
+        ),
       };
     });
 
@@ -252,13 +271,17 @@ export default function App() {
   const ackAllAlerts = () => {
     if (!pending.length) return;
     update((s) => {
-      const iso = nowRef.current.toISOString();
-      const dStr = todayStr(nowRef.current);
+      const curNow = nowRef.current;
+      const iso = curNow.toISOString();
+      const dStr = todayStr(curNow);
+      const nowM = minOfDay(curNow);
       let shifts = [...s.shifts];
       const pendingList = s.alerts.filter((a) => !a.acknowledgedAt);
 
       pendingList.forEach((a) => {
-        shifts = shifts.map((sh) => (sh.id === a.shiftId ? applyAck(sh, a.eventType, dStr, iso) : sh));
+        shifts = shifts.map((sh) =>
+          sh.id === a.shiftId ? applyAck(sh, a.eventType, shiftCycleDate(sh, dStr, nowM), iso) : sh,
+        );
       });
 
       return {
@@ -274,9 +297,11 @@ export default function App() {
   const quickLog = (shiftId: string) => {
     let wasIncident = false;
     update((s) => {
-      const iso = nowRef.current.toISOString();
-      const dStr = todayStr(nowRef.current);
-      const hhmm = fmtClock(nowRef.current).slice(0, 5);
+      const curNow = nowRef.current;
+      const iso = curNow.toISOString();
+      const dStr = todayStr(curNow);
+      const nowM = minOfDay(curNow);
+      const hhmm = fmtClock(curNow).slice(0, 5);
       const target = s.shifts.find((sh) => sh.id === shiftId);
       wasIncident = !!target && isIncidentState(target.currentState);
       const targetWs = target ? s.workstations.find((w) => w.id === target.wsId) : undefined;
@@ -300,7 +325,14 @@ export default function App() {
         ...s,
         shifts: s.shifts.map((sh) =>
           sh.id === shiftId
-            ? { ...sh, currentState: 'logged', breakKind: '', stateDate: dStr, incidentTime: '', updatedAt: iso }
+            ? {
+                ...sh,
+                currentState: 'logged',
+                breakKind: '',
+                stateDate: shiftCycleDate(sh, dStr, nowM),
+                incidentTime: '',
+                updatedAt: iso,
+              }
             : sh,
         ),
         alerts: [
@@ -317,13 +349,22 @@ export default function App() {
   // Botão rápido "Deslogar" para confirmar encerramento do turno vencido
   const quickLogout = (shiftId: string) => {
     update((s) => {
-      const iso = nowRef.current.toISOString();
-      const dStr = todayStr(nowRef.current);
+      const curNow = nowRef.current;
+      const iso = curNow.toISOString();
+      const dStr = todayStr(curNow);
+      const nowM = minOfDay(curNow);
       return {
         ...s,
         shifts: s.shifts.map((sh) =>
           sh.id === shiftId
-            ? { ...sh, currentState: 'done', breakKind: '', stateDate: dStr, incidentTime: '', updatedAt: iso }
+            ? {
+                ...sh,
+                currentState: 'done',
+                breakKind: '',
+                stateDate: shiftCycleDate(sh, dStr, nowM),
+                incidentTime: '',
+                updatedAt: iso,
+              }
             : sh,
         ),
         alerts: s.alerts.map((al) =>
@@ -338,7 +379,7 @@ export default function App() {
   const scheduledToLog = useMemo(() => {
     return (snap?.shifts ?? []).filter((s) => {
       if (!s.operatorName.trim()) return false;
-      const st = effectiveState(s, today);
+      const st = effectiveState(s, today, nowMin);
       if (st === 'logged' || st === 'falta' || st === 'atestado' || st === 'dsr' || st === 'ferias' || isIncidentState(st))
         return false;
       return inWindow(s, nowMin);
@@ -349,7 +390,7 @@ export default function App() {
   const overdueLogouts = useMemo(() => {
     return (snap?.shifts ?? []).filter((s) => {
       if (!s.operatorName.trim()) return false;
-      const st = effectiveState(s, today);
+      const st = effectiveState(s, today, nowMin);
       return (st === 'logged' || st === 'break') && isPastShiftLogout(s, nowMin);
     });
   }, [snap, today, nowMin]);
@@ -359,14 +400,23 @@ export default function App() {
     if (!scheduledToLog.length) return;
     const count = scheduledToLog.length;
     update((s) => {
-      const iso = nowRef.current.toISOString();
-      const dStr = todayStr(nowRef.current);
+      const curNow = nowRef.current;
+      const iso = curNow.toISOString();
+      const dStr = todayStr(curNow);
+      const nowM = minOfDay(curNow);
       const targetIds = new Set(scheduledToLog.map((x) => x.id));
       return {
         ...s,
         shifts: s.shifts.map((sh) =>
           targetIds.has(sh.id)
-            ? { ...sh, currentState: 'logged', breakKind: '', stateDate: dStr, incidentTime: '', updatedAt: iso }
+            ? {
+                ...sh,
+                currentState: 'logged',
+                breakKind: '',
+                stateDate: shiftCycleDate(sh, dStr, nowM),
+                incidentTime: '',
+                updatedAt: iso,
+              }
             : sh,
         ),
         alerts: s.alerts.map((al) =>
@@ -382,14 +432,23 @@ export default function App() {
     if (!overdueLogouts.length) return;
     const count = overdueLogouts.length;
     update((s) => {
-      const iso = nowRef.current.toISOString();
-      const dStr = todayStr(nowRef.current);
+      const curNow = nowRef.current;
+      const iso = curNow.toISOString();
+      const dStr = todayStr(curNow);
+      const nowM = minOfDay(curNow);
       const targetIds = new Set(overdueLogouts.map((x) => x.id));
       return {
         ...s,
         shifts: s.shifts.map((sh) =>
           targetIds.has(sh.id)
-            ? { ...sh, currentState: 'done', breakKind: '', stateDate: dStr, incidentTime: '', updatedAt: iso }
+            ? {
+                ...sh,
+                currentState: 'done',
+                breakKind: '',
+                stateDate: shiftCycleDate(sh, dStr, nowM),
+                incidentTime: '',
+                updatedAt: iso,
+              }
             : sh,
         ),
         alerts: s.alerts.map((al) =>
@@ -407,11 +466,13 @@ export default function App() {
     if (targetIsHO && tab === 'presencial') setTab('ho');
     else if (!targetIsHO && tab === 'ho') setTab('presencial');
 
+    clearTimeout(locateScrollTimerRef.current);
+    clearTimeout(locateClearTimerRef.current);
     setHighlight(wsId);
-    setTimeout(() => {
+    locateScrollTimerRef.current = setTimeout(() => {
       document.getElementById(`pa-${wsId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
     }, 80);
-    setTimeout(() => setHighlight(null), 3500);
+    locateClearTimerRef.current = setTimeout(() => setHighlight(null), 3500);
   };
 
   // Adicionar nova posição dinâmica no Home Office
@@ -431,13 +492,20 @@ export default function App() {
     const s0 = ref.current!;
     if (s0.workstations.some((w) => w.id !== ws.id && w.code.toLowerCase() === ws.code.toLowerCase()))
       return `O código "${ws.code}" já existe em outra PA.`;
+    if (moveTo) {
+      const dest = s0.workstations.find((w) => w.id === moveTo);
+      if (ws.status === 'maintenance' || !dest || dest.status === 'maintenance') {
+        return 'Não é possível transferir envolvendo uma PA em manutenção.';
+      }
+    }
 
     let movedMsg = '';
+    const removedSet = new Set(removed);
     update((s) => {
       const iso = nowRef.current.toISOString();
       const dStr = todayStr(nowRef.current);
       const hhmm = fmtClock(nowRef.current).slice(0, 5);
-      const kept = s.shifts.filter((x) => !removed.includes(x.id) && !list.some((l) => l.id === x.id));
+      const kept = s.shifts.filter((x) => !removedSet.has(x.id) && !list.some((l) => l.id === x.id));
       const clearedShiftIds = new Set(
         list
           .filter((l) =>
@@ -487,13 +555,15 @@ export default function App() {
         workstations: s.workstations.map((w) => (w.id === ws.id ? { ...ws, label: ws.code } : w)),
         shifts: [...kept, ...list.map((l) => ({ ...l, wsId: ws.id, updatedAt: iso }))],
         alerts: [
-          ...s.alerts.map((a) => {
-            if (a.acknowledgedAt) return a;
-            if (clearedShiftIds.has(a.shiftId)) {
-              return { ...a, wsCode: ws.code, acknowledgedAt: iso };
-            }
-            return a.wsId === ws.id ? { ...a, wsCode: ws.code } : a;
-          }),
+          ...s.alerts
+            .filter((a) => a.acknowledgedAt || !removedSet.has(a.shiftId))
+            .map((a) => {
+              if (a.acknowledgedAt) return a;
+              if (clearedShiftIds.has(a.shiftId)) {
+                return { ...a, wsCode: ws.code, acknowledgedAt: iso };
+              }
+              return a.wsId === ws.id ? { ...a, wsCode: ws.code } : a;
+            }),
           ...incidentLogs,
         ],
       };
@@ -515,17 +585,19 @@ export default function App() {
       const r = await parseImport(f, ref.current!.workstations);
       if (
         !window.confirm(
-          `Importar ${r.shifts.length} operador(es) em ${r.affectedWs.size} posição(ões)?\nOs turnos atuais dessas posições serão substituídos.`,
+          `Importar ${r.shifts.length} operador(es) em ${r.affectedWs.size} posição(ões)?\nOs turnos atuais dessas posições serão substituídos (linhas em branco da planilha são ignoradas).`,
         )
       )
         return;
       update((s) => {
         const existingIds = new Set(s.workstations.map((w) => w.id));
         const addedWs = r.newWorkstations.filter((w) => !existingIds.has(w.id));
+        const replacedIds = new Set(s.shifts.filter((x) => r.affectedWs.has(x.wsId)).map((x) => x.id));
         return {
           ...s,
           workstations: [...s.workstations, ...addedWs],
           shifts: [...s.shifts.filter((x) => !r.affectedWs.has(x.wsId)), ...r.shifts],
+          alerts: s.alerts.filter((a) => a.acknowledgedAt || !replacedIds.has(a.shiftId)),
         };
       });
       flash(
@@ -797,6 +869,12 @@ export default function App() {
         </div>
       </header>
 
+      {clock.simOn && (
+        <div className="border-b border-fuchsia-400 bg-fuchsia-600 px-4 py-1.5 text-center text-xs font-bold text-white">
+          Modo Simulação ativo — alertas e alterações simuladas ficam apenas na memória e NÃO são gravados no banco. Desative a simulação para recarregar os dados reais.
+        </div>
+      )}
+
       {/* PAINEL DE RESUMO RÁPIDO CLICÁVEL (PRESENCIAL + HOME OFFICE) */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-white px-4 py-2 dark:border-slate-700 dark:bg-slate-900">
         {summaryCards.map((c) => {
@@ -852,10 +930,23 @@ export default function App() {
 
         <span
           className={`ml-auto flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${
-            online ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
+            !online
+              ? 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
+              : realtimeStatus === 'connected'
+                ? 'bg-emerald-100 text-emerald-800'
+                : realtimeStatus === 'error'
+                  ? 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200'
+                  : 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200'
           }`}
         >
-          {online ? <Wifi size={14} /> : <WifiOff size={14} />} {online ? 'Supabase Online' : 'Modo Local (Testes)'}
+          {!online || realtimeStatus === 'error' ? <WifiOff size={14} /> : <Wifi size={14} />}{' '}
+          {!online
+            ? 'Modo Local (Testes)'
+            : realtimeStatus === 'connected'
+              ? 'Supabase Online'
+              : realtimeStatus === 'error'
+                ? 'Realtime Offline'
+                : 'Conectando…'}
         </span>
       </div>
 
@@ -936,6 +1027,8 @@ export default function App() {
           shifts={snap.shifts.filter((s) => s.wsId === editWs.id)}
           allWs={snap.workstations}
           occupiedWsIds={occupiedWsIds}
+          today={today}
+          getNow={getNow}
           onClose={() => setEditId(null)}
           onSave={saveWs}
         />
@@ -946,6 +1039,10 @@ export default function App() {
           syncing={syncing}
           message={msg}
           onSync={async () => {
+            if (clock.simOn) {
+              flash('Desative o Modo Simulação antes de sincronizar.');
+              return;
+            }
             if (
               !window.confirm(
                 'Enviar os dados salvos no localStorage deste navegador para o Supabase? Registros com o mesmo ID serão sobrescritos.',

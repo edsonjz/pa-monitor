@@ -1,5 +1,5 @@
 import type { AlertLog, BreakKind, EventType, IncidentState, Shift, ShiftState, Workstation } from '../types';
-import { fmtMin, toMin } from './time';
+import { addDaysStr, fmtMin, toMin } from './time';
 
 export const EVENT_LABEL: Record<EventType, string> = {
   login: 'LOGIN PENDENTE',
@@ -90,7 +90,8 @@ export function detectAlerts(
     const ws = wsMap.get(s.wsId);
     if (!ws || ws.status === 'maintenance') continue;
 
-    const curState = effectiveState(s, today);
+    const cycleDate = shiftCycleDate(s, today, nowMin);
+    const curState = effectiveState(s, today, nowMin);
     // Operadores em ausência ou ocorrência remota não geram alertas de login/pausa/logout
     if (
       curState === 'falta' ||
@@ -119,7 +120,8 @@ export function detectAlerts(
           isDue = due(ev.time, nowMin);
         }
       } else if (ev.type === 'b1r' || ev.type === 'b60r' || ev.type === 'b2r') {
-        if (curState === 'break' && !isPastLogout) {
+        const expectedKind = ev.type === 'b1r' ? 'b1' : ev.type === 'b60r' ? 'b60' : 'b2';
+        if (curState === 'break' && !isPastLogout && (!s.breakKind || s.breakKind === expectedKind)) {
           if (relNow >= ev.time) isDue = true;
         }
       } else if (ev.type === 'logout') {
@@ -131,7 +133,7 @@ export function detectAlerts(
 
       if (!isDue) continue;
 
-      const id = alertKey(today, s.id, ev.type, ev.time);
+      const id = alertKey(cycleDate, s.id, ev.type, ev.time);
       if (existing.has(id)) continue;
       existing.add(id);
       out.push({
@@ -174,8 +176,22 @@ export function applyAck(s: Shift, type: EventType, today: string, nowIso: strin
   }
 }
 
-export const effectiveState = (s: Shift, today: string): ShiftState =>
-  s.stateDate === today ? s.currentState : 'pending';
+export function shiftCycleDate(s: Shift, today: string, nowMin?: number): string {
+  const loginM = toMin(s.loginTime);
+  const logoutM = toMin(s.logoutTime);
+  if (nowMin !== undefined && loginM !== null && logoutM !== null && logoutM < loginM) {
+    const cutoff = Math.floor((logoutM + loginM) / 2);
+    if (nowMin < cutoff) return addDaysStr(today, -1);
+  }
+  return today;
+}
+
+export const effectiveState = (s: Shift, today: string, nowMin?: number): ShiftState => {
+  const cycle = shiftCycleDate(s, today, nowMin);
+  if (s.stateDate === cycle) return s.currentState;
+  if (cycle !== today && s.stateDate === today) return s.currentState;
+  return 'pending';
+};
 
 export function isPastShiftLogout(s: Shift, nowMin: number): boolean {
   const loginM = toMin(s.loginTime);
@@ -234,9 +250,23 @@ export function buildViews(
   today: string,
 ): Map<string, WsView> {
   const byWs = new Map<string, Shift[]>();
-  shifts.forEach((s) => byWs.set(s.wsId, [...(byWs.get(s.wsId) ?? []), s]));
+  for (const s of shifts) {
+    let arr = byWs.get(s.wsId);
+    if (!arr) {
+      arr = [];
+      byWs.set(s.wsId, arr);
+    }
+    arr.push(s);
+  }
   const alertsByWs = new Map<string, AlertLog[]>();
-  pending.forEach((a) => alertsByWs.set(a.wsId, [...(alertsByWs.get(a.wsId) ?? []), a]));
+  for (const a of pending) {
+    let arr = alertsByWs.get(a.wsId);
+    if (!arr) {
+      arr = [];
+      alertsByWs.set(a.wsId, arr);
+    }
+    arr.push(a);
+  }
   const map = new Map<string, WsView>();
   for (const ws of wss) {
     const list = byWs.get(ws.id) ?? [];
@@ -244,11 +274,11 @@ export function buildViews(
     let shift: Shift | null = null;
     if (als.length) shift = list.find((s) => s.id === als[0].shiftId) ?? null;
     if (!shift) shift = list.find((s) => inWindow(s, now)) ?? null;
-    if (!shift) shift = list.find((s) => ACTIVE_STATES.includes(effectiveState(s, today))) ?? null;
+    if (!shift) shift = list.find((s) => ACTIVE_STATES.includes(effectiveState(s, today, now))) ?? null;
     if (!shift) shift = list[0] ?? null;
     let state: WsView['state'] = 'free';
     if (ws.status === 'maintenance') state = 'maint';
-    else if (shift) state = effectiveState(shift, today);
+    else if (shift) state = effectiveState(shift, today, now);
     const category: Category =
       state === 'maint'
         ? 'maint'
