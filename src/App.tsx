@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Building2,
-  FastForward,
   FileSpreadsheet,
   Download,
   Home,
   LayoutGrid,
   LogOut,
   Moon,
-  Play,
   Settings,
-  Square,
   Sun,
   Upload,
   UserCheck,
@@ -75,7 +72,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const isAuth = authUser !== null;
   const clock = useClock();
-  const { snap, ref, update, error, realtimeStatus } = useStore(isAuth, clock.simOn);
+  const { snap, ref, update, error, realtimeStatus } = useStore(isAuth);
 
   useEffect(() => {
     let active = true;
@@ -110,8 +107,6 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState('');
   const [highlight, setHighlight] = useState<string | null>(null);
-  const [simH, setSimH] = useState(now.getHours());
-  const [simM, setSimM] = useState(now.getMinutes());
   const fileRef = useRef<HTMLInputElement>(null);
 
   const flashTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -141,7 +136,7 @@ export default function App() {
   // Motor de alertas: avalia na virada de minuto ou alteração do snapshot (com pequeno jitter em nuvem)
   useEffect(() => {
     if (!isAuth || !snap) return;
-    const delay = storageMode === 'supabase' && !clock.simOn ? Math.floor(Math.random() * 1200) : 0;
+    const delay = storageMode === 'supabase' ? Math.floor(Math.random() * 1200) : 0;
     const t = setTimeout(() => {
       const s = ref.current;
       if (!s) return;
@@ -158,7 +153,7 @@ export default function App() {
       }
     }, delay);
     return () => clearTimeout(t);
-  }, [isAuth, clock.minuteKey, clock.simOn, snap, getNow, ref, update]);
+  }, [isAuth, clock.minuteKey, snap, getNow, ref, update]);
 
   const pending = useMemo(
     () =>
@@ -771,50 +766,7 @@ export default function App() {
           </button>
         </nav>
 
-        <HeaderClock getNow={getNow} simOn={clock.simOn} minuteKey={clock.minuteKey} />
-
-        <div className="flex flex-wrap items-center gap-1 rounded-lg bg-black/20 px-2 py-1">
-          <button
-            className="btn"
-            onClick={() => {
-              const cur = getNow();
-              setSimH(cur.getHours());
-              setSimM(cur.getMinutes());
-              clock.toggleSim();
-            }}
-          >
-            {clock.simOn ? <Square size={13} /> : <Play size={13} />} Simulação {clock.simOn ? 'ON' : 'OFF'}
-          </button>
-          <input
-            type="number"
-            min={0}
-            max={23}
-            value={simH}
-            onChange={(e) => setSimH(+e.target.value)}
-            className="w-12 rounded bg-white/90 px-1 py-1 text-center text-xs text-black"
-          />
-          <span>:</span>
-          <input
-            type="number"
-            min={0}
-            max={59}
-            value={simM}
-            onChange={(e) => setSimM(+e.target.value)}
-            className="w-12 rounded bg-white/90 px-1 py-1 text-center text-xs text-black"
-          />
-          <button
-            className="btn"
-            onClick={() => clock.setSimTime(Math.min(23, Math.max(0, simH)), Math.min(59, Math.max(0, simM)))}
-          >
-            Aplicar
-          </button>
-          <button className="btn" disabled={!clock.simOn} onClick={() => clock.addMinutes(5)}>
-            <FastForward size={13} /> +5min
-          </button>
-          <button className="btn" disabled={!clock.simOn} onClick={() => clock.addMinutes(15)}>
-            <FastForward size={13} /> +15min
-          </button>
-        </div>
+        <HeaderClock getNow={getNow} />
 
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <input
@@ -883,12 +835,6 @@ export default function App() {
         </div>
       </header>
 
-      {clock.simOn && (
-        <div className="border-b border-fuchsia-400 bg-fuchsia-600 px-4 py-1.5 text-center text-xs font-bold text-white">
-          Modo Simulação ativo — alertas e alterações simuladas ficam apenas na memória e NÃO são gravados no banco. Desative a simulação para recarregar os dados reais.
-        </div>
-      )}
-
       <SummaryBar
         summary={summary}
         statusF={statusF}
@@ -952,10 +898,6 @@ export default function App() {
           syncing={syncing}
           message={msg}
           onSync={async () => {
-            if (clock.simOn) {
-              flash('Desative o Modo Simulação antes de sincronizar.');
-              return;
-            }
             if (
               !window.confirm(
                 'Enviar os dados salvos no localStorage deste navegador para o Supabase? Registros com o mesmo ID serão sobrescritos.',

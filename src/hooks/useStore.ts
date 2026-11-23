@@ -4,14 +4,11 @@ import { applyRealtimeChange, type RealtimeChange } from '../services/realtimeRe
 import { loadSnapshot, persist, type RealtimeStatus, subscribeRealtime } from '../services/storageService';
 import { defaultWorkstations } from '../lib/layout';
 
-export function useStore(enabled = true, simulationMode = false) {
+export function useStore(enabled = true) {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>('idle');
   const ref = useRef<Snapshot | null>(null);
-  const simRef = useRef(simulationMode);
-  simRef.current = simulationMode;
-  const prevSimRef = useRef(simulationMode);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const inFlightRef = useRef(0);
   const pendingChangesRef = useRef<RealtimeChange[]>([]);
@@ -44,7 +41,6 @@ export function useStore(enabled = true, simulationMode = false) {
     void load();
     return subscribeRealtime(
       (change) => {
-        if (simRef.current) return;
         if (inFlightRef.current > 0) {
           pendingChangesRef.current.push(change);
           return;
@@ -58,17 +54,10 @@ export function useStore(enabled = true, simulationMode = false) {
       },
       setRealtimeStatus,
       () => {
-        if (!simRef.current) void load();
+        void load();
       },
     );
   }, [enabled, load]);
-
-  useEffect(() => {
-    if (prevSimRef.current && !simulationMode && enabled) {
-      void load();
-    }
-    prevSimRef.current = simulationMode;
-  }, [simulationMode, enabled, load]);
 
   const update = useCallback(
     (fn: (s: Snapshot) => Snapshot) => {
@@ -78,7 +67,6 @@ export function useStore(enabled = true, simulationMode = false) {
       if (next === prev) return;
       ref.current = next;
       setSnap(next);
-      if (simRef.current) return;
 
       inFlightRef.current += 1;
       queueRef.current = queueRef.current.then(async () => {
@@ -90,7 +78,7 @@ export function useStore(enabled = true, simulationMode = false) {
           await load();
         } finally {
           inFlightRef.current = Math.max(0, inFlightRef.current - 1);
-          if (inFlightRef.current === 0 && !simRef.current && pendingChangesRef.current.length > 0) {
+          if (inFlightRef.current === 0 && pendingChangesRef.current.length > 0) {
             const queued = pendingChangesRef.current.splice(0);
             const cur = ref.current;
             if (cur) {

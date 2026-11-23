@@ -59,7 +59,7 @@ export const LAYOUT = {
   b5top: range(39, 42),
   b5bottom: range(43, 46),
   b6: range(47, 50), // 1 col x 4 linhas
-  b7: range(51, 58), // 2 col x 4 linhas
+  b7: [...range(51, 58), paId(73), paId(74)], // 2 col x 5 linhas (PA-73 abaixo da 72, PA-74 abaixo da 75)
 };
 
 export function defaultWorkstations(): Workstation[] {
@@ -81,4 +81,12 @@ export function defaultWorkstations(): Workstation[] {
   LAYOUT.b6.forEach((id, i) => add(id, 'operator', 'Bloco 6', `r${i + 1}c1`));
   LAYOUT.b7.forEach((id, i) => add(id, 'operator', 'Bloco 7', `r${Math.floor(i / 2) + 1}c${(i % 2) + 1}`));
   return ensureHomeOfficeWorkstations(out, 24);
+}
+
+/** Garante todas as posições físicas do layout e ao menos `minHoCount` posições de Home Office sem alterar as PAs existentes. */
+export function ensureRequiredWorkstations(wss: Workstation[], minHoCount = 24): Workstation[] {
+  const existing = new Set(wss.map((w) => w.id));
+  const missingPhysical = defaultWorkstations().filter((w) => !isHomeOfficeWs(w) && !existing.has(w.id));
+  const merged = missingPhysical.length ? [...wss, ...missingPhysical] : wss;
+  return ensureHomeOfficeWorkstations(merged, minHoCount);
 }

@@ -1,5 +1,5 @@
 import type { Snapshot } from '../types';
-import { defaultWorkstations, ensureHomeOfficeWorkstations } from '../lib/layout';
+import { defaultWorkstations, ensureRequiredWorkstations } from '../lib/layout';
 import { sampleShifts } from '../lib/seed';
 import {
   alertFromRow,
@@ -32,7 +32,7 @@ const writeLocal = (s: Snapshot) => localStorage.setItem(KEY, JSON.stringify(s))
 function initLocal(): Snapshot {
   const existing = readLocal();
   if (existing) {
-    const ensured = ensureHomeOfficeWorkstations(existing.workstations, 24);
+    const ensured = ensureRequiredWorkstations(existing.workstations, 24);
     if (ensured.length !== existing.workstations.length) {
       const updated = { ...existing, workstations: ensured };
       writeLocal(updated);
@@ -73,11 +73,11 @@ async function loadRemote(): Promise<Snapshot> {
     await must(db.from('workstations').upsert(workstations.map(wsToRow)));
   } else {
     const existingIds = new Set(workstations.map((x) => x.id));
-    const ensured = ensureHomeOfficeWorkstations(workstations, 24);
+    const ensured = ensureRequiredWorkstations(workstations, 24);
     const added = ensured.filter((x) => !existingIds.has(x.id));
     if (added.length > 0) {
       workstations = ensured;
-      await must(db.from('workstations').upsert(added.map(wsToRow)));
+      await must(db.from('workstations').upsert(added.map(wsToRow), { ignoreDuplicates: true }));
     }
   }
   return {
