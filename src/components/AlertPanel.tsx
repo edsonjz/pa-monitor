@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { BellRing, Building2, Check, ChevronRight, History, Home, LocateFixed } from 'lucide-react';
 import type { AlertLog } from '../types';
 import { EVENT_LABEL } from '../lib/engine';
+import { isHomeOfficeId } from '../lib/layout';
 
 interface Props {
   pending: AlertLog[];
@@ -13,7 +14,7 @@ interface Props {
 
 const hhmmss = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString('pt-BR') : '');
 
-const isHOAlert = (a: AlertLog) => a.wsId.startsWith('HO-') || a.wsCode.toUpperCase().startsWith('HO-');
+const isHOAlert = (a: AlertLog) => isHomeOfficeId(a.wsId, a.wsCode);
 
 const isIncidentEvent = (t: AlertLog['eventType']) =>
   t === 'no_internet' || t === 'no_power' || t === 'tech_issue';

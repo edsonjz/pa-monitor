@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { CloudUpload, Eraser, RotateCcw, X } from 'lucide-react';
 import { storageMode } from '../services/storageService';
 
@@ -12,6 +13,14 @@ interface Props {
 
 export default function SettingsModal({ onClose, onSync, onClearSamples, onReset, syncing, message }: Props) {
   const online = storageMode === 'supabase';
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div

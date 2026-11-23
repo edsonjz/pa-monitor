@@ -29,7 +29,7 @@ create table if not exists public.operator_shifts (
   logout_time     text,
   notes           text,
   current_state   text not null default 'pending' check (current_state in ('pending','logged','break','done','falta','atestado','dsr','ferias','no_internet','no_power','tech_issue')),
-  break_kind      text,
+  break_kind      text check (break_kind is null or break_kind in ('', 'b1', 'b60', 'b2')),
   state_date      text,
   incident_time   text not null default '',
   updated_at      timestamptz not null default now(),
@@ -42,7 +42,7 @@ create table if not exists public.alert_logs (
   shift_id        text,
   ws_code         text,
   operator_name   text,
-  event_type      text not null,
+  event_type      text not null check (event_type in ('login','b1s','b1r','b60s','b60r','b2s','b2r','logout','no_internet','no_power','tech_issue','incident_resolved')),
   scheduled_time  text,
   acknowledged_at timestamptz,
   created_at      timestamptz not null default now(),
@@ -67,6 +67,8 @@ create index if not exists idx_alerts_unacked
   where acknowledged_at is null;
 create index if not exists idx_alerts_created_desc
   on public.alert_logs (created_at desc);
+create index if not exists idx_alerts_shift_id on public.alert_logs(shift_id);
+create index if not exists idx_alerts_ws_id on public.alert_logs(workstation_id);
 
 -- ---------------------------------------------------------------------
 -- Auditoria automática no servidor (SECURITY INVOKER)

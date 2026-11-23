@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { AlertTriangle, Check, Home } from 'lucide-react';
 import type { WsView } from '../lib/engine';
 import { BREAK_LABEL, EVENT_LABEL, breakReturn, isIncidentState } from '../lib/engine';
@@ -8,14 +9,14 @@ interface Props {
   dim: boolean;
   highlight: boolean;
   spanClass?: string;
-  onOpen: () => void;
+  onOpen: (wsId: string) => void;
   onAck: (alertId: string) => void;
   onQuickLog: (shiftId: string) => void;
   onQuickLogout: (shiftId: string) => void;
   onDropOn: (fromId: string, toId: string) => void;
 }
 
-export default function PACard({
+export default memo(function PACard({
   view,
   dim,
   highlight,
@@ -107,6 +108,8 @@ export default function PACard({
   return (
     <div
       id={`pa-${ws.id}`}
+      role="button"
+      tabIndex={0}
       draggable={hasOp && !alert}
       onDragStart={(e) => e.dataTransfer.setData('text/plain', ws.id)}
       onDragOver={(e) => e.preventDefault()}
@@ -115,7 +118,13 @@ export default function PACard({
         const from = e.dataTransfer.getData('text/plain');
         if (from && from !== ws.id) onDropOn(from, ws.id);
       }}
-      onClick={onOpen}
+      onClick={() => onOpen(ws.id)}
+      onKeyDown={(e) => {
+        if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onOpen(ws.id);
+        }
+      }}
       title={
         hasOp
           ? `${shift!.operatorName}${isHO ? ' (Home Office)' : ''}${shift!.team ? ` · Equipe: ${shift!.team}` : ''} (clique para editar, ocorrências ou transferir)`
@@ -216,4 +225,4 @@ export default function PACard({
       )}
     </div>
   );
-}
+});

@@ -1,17 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Building2,
-  Check,
-  Clock,
-  Download,
   FastForward,
   FileSpreadsheet,
+  Download,
   Home,
   LayoutGrid,
   LogOut,
   Moon,
   Play,
-  Search,
   Settings,
   Square,
   Sun,
@@ -19,17 +16,23 @@ import {
   UserCheck,
   Volume2,
   VolumeX,
-  Wifi,
-  WifiOff,
-  X,
 } from 'lucide-react';
 import type { AlertLog, Shift, Snapshot, Workstation } from './types';
 import { useStore } from './hooks/useStore';
 import { useClock } from './hooks/useClock';
-import { applyAck, buildViews, detectAlerts, effectiveState, inWindow, isIncidentState, isPastShiftLogout, shiftCycleDate } from './lib/engine';
+import {
+  applyAck,
+  buildViews,
+  detectAlerts,
+  effectiveState,
+  inWindow,
+  isIncidentState,
+  isPastShiftLogout,
+  shiftCycleDate,
+} from './lib/engine';
 import { fmtClock, minOfDay, todayStr } from './lib/time';
 import { beep } from './lib/sound';
-import { defaultWorkstations, hoNumber, isHomeOfficeWs, makeHomeOfficeWs } from './lib/layout';
+import { defaultWorkstations, hoNumber, isHomeOfficeId, isHomeOfficeWs, makeHomeOfficeWs } from './lib/layout';
 import { storageMode, syncLocalToSupabase } from './services/storageService';
 import { type AuthUser, getInitialAuthUser, logout, subscribeAuthState } from './services/authService';
 import FloorMap from './components/FloorMap';
@@ -39,20 +42,11 @@ import EditModal from './components/EditModal';
 import AlertPanel from './components/AlertPanel';
 import SettingsModal from './components/SettingsModal';
 import LoginScreen from './components/LoginScreen';
+import HeaderClock from './components/HeaderClock';
+import SummaryBar, { type StatusFilter, type SummaryStats } from './components/SummaryBar';
+import FilterBar from './components/FilterBar';
 
 type ViewTab = 'presencial' | 'ho' | 'all';
-type StatusFilter =
-  | 'all'
-  | 'alert'
-  | 'logged'
-  | 'break'
-  | 'incident'
-  | 'falta'
-  | 'atestado'
-  | 'dsr'
-  | 'ferias'
-  | 'maint'
-  | 'free';
 
 /** Troca de lugar (ou move) todos os turnos entre duas PAs (incluindo Presencial <-> Home Office). */
 function swapWs(s: Snapshot, a: string, b: string): Snapshot {
@@ -100,10 +94,25 @@ export default function App() {
       unsub();
     };
   }, []);
-  const { now } = clock;
+
+  const { now, getNow } = clock;
   const nowRef = useRef(now);
   nowRef.current = now;
-  const getNow = useCallback(() => nowRef.current, []);
+
+  const [tab, setTab] = useState<ViewTab>('presencial');
+  const [dark, setDark] = useState(() => localStorage.getItem('pa-dark') === '1');
+  const [soundOn, setSoundOn] = useState(() => localStorage.getItem('pa-sound') !== '0');
+  const [search, setSearch] = useState('');
+  const [statusF, setStatusF] = useState<StatusFilter>('all');
+  const [teamF, setTeamF] = useState('');
+  const [editId, setEditId] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const [simH, setSimH] = useState(now.getHours());
+  const [simM, setSimM] = useState(now.getMinutes());
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const flashTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const locateScrollTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -117,44 +126,39 @@ export default function App() {
     };
   }, []);
 
-  const [tab, setTab] = useState<ViewTab>('presencial');
-  const [dark, setDark] = useState(() => localStorage.getItem('pa-dark') === '1');
-  const [soundOn, setSoundOn] = useState(true);
-  const [search, setSearch] = useState('');
-  const [statusF, setStatusF] = useState<StatusFilter>('all');
-  const [teamF, setTeamF] = useState('');
-  const [editId, setEditId] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [msg, setMsg] = useState('');
-  const [highlight, setHighlight] = useState<string | null>(null);
-  const [simH, setSimH] = useState(now.getHours());
-  const [simM, setSimM] = useState(now.getMinutes());
-  const fileRef = useRef<HTMLInputElement>(null);
-
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
     localStorage.setItem('pa-dark', dark ? '1' : '0');
   }, [dark]);
 
+  useEffect(() => {
+    localStorage.setItem('pa-sound', soundOn ? '1' : '0');
+  }, [soundOn]);
+
   const today = todayStr(now);
   const nowMin = minOfDay(now);
-  const sec = Math.floor(now.getTime() / 1000);
 
-  // Motor de alertas: roda a cada segundo (apenas quando autenticado)
+  // Motor de alertas: avalia na virada de minuto ou alteração do snapshot (com pequeno jitter em nuvem)
   useEffect(() => {
-    if (!isAuth) return;
-    const s = ref.current;
-    if (!s) return;
-    const existing = new Set(s.alerts.map((a) => a.id));
-    const created = detectAlerts(s.shifts, s.workstations, existing, nowMin, today, nowRef.current.toISOString());
-    if (created.length) {
-      update((cur) => ({
-        ...cur,
-        alerts: [...cur.alerts, ...created.filter((c) => !cur.alerts.some((a) => a.id === c.id))],
-      }));
-    }
-  }, [isAuth, sec, !!snap]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!isAuth || !snap) return;
+    const delay = storageMode === 'supabase' && !clock.simOn ? Math.floor(Math.random() * 1200) : 0;
+    const t = setTimeout(() => {
+      const s = ref.current;
+      if (!s) return;
+      const curNow = getNow();
+      const curToday = todayStr(curNow);
+      const curMin = minOfDay(curNow);
+      const existing = new Set(s.alerts.map((a) => a.id));
+      const created = detectAlerts(s.shifts, s.workstations, existing, curMin, curToday, curNow.toISOString());
+      if (created.length) {
+        update((cur) => ({
+          ...cur,
+          alerts: [...cur.alerts, ...created.filter((c) => !cur.alerts.some((a) => a.id === c.id))],
+        }));
+      }
+    }, delay);
+    return () => clearTimeout(t);
+  }, [isAuth, clock.minuteKey, clock.simOn, snap, getNow, ref, update]);
 
   const pending = useMemo(
     () =>
@@ -172,18 +176,32 @@ export default function App() {
     [snap],
   );
 
+  const hasPending = pending.length > 0;
   // Som: bipe contínuo e suave enquanto houver alertas pendentes e usuário autenticado
   useEffect(() => {
-    if (!isAuth || !soundOn || pending.length === 0) return;
+    if (!isAuth || !soundOn || !hasPending) return;
     beep();
     const i = setInterval(beep, 4000);
     return () => clearInterval(i);
-  }, [isAuth, soundOn, pending.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isAuth, soundOn, hasPending]);
 
   const views = useMemo(
     () => buildViews(snap?.workstations ?? [], snap?.shifts ?? [], pending, nowMin, today),
     [snap, pending, nowMin, today],
   );
+
+  const shiftsByWs = useMemo(() => {
+    const map = new Map<string, Shift[]>();
+    for (const s of snap?.shifts ?? []) {
+      let arr = map.get(s.wsId);
+      if (!arr) {
+        arr = [];
+        map.set(s.wsId, arr);
+      }
+      arr.push(s);
+    }
+    return map;
+  }, [snap]);
 
   const hoWorkstations = useMemo(
     () =>
@@ -205,18 +223,18 @@ export default function App() {
 
   // Alerta cruzado entre abas (Presencial vs Home Office)
   const pendingPresencial = useMemo(
-    () => pending.filter((a) => !a.wsId.startsWith('HO-') && !a.wsCode.toUpperCase().startsWith('HO-')).length,
+    () => pending.filter((a) => !isHomeOfficeId(a.wsId, a.wsCode)).length,
     [pending],
   );
   const pendingHO = useMemo(
-    () => pending.filter((a) => a.wsId.startsWith('HO-') || a.wsCode.toUpperCase().startsWith('HO-')).length,
+    () => pending.filter((a) => isHomeOfficeId(a.wsId, a.wsCode)).length,
     [pending],
   );
 
   // Resumo rápido por status com quebra Presencial vs Home Office
-  const summary = useMemo(() => {
+  const summary: SummaryStats = useMemo(() => {
     const empty = () => ({ total: 0, pres: 0, ho: 0 });
-    const stats = {
+    const stats: SummaryStats = {
       all: empty(),
       logged: empty(),
       break: empty(),
@@ -243,137 +261,165 @@ export default function App() {
     return stats;
   }, [views]);
 
-  const flash = (m: string) => {
+  const matchingIds = useMemo(() => {
+    const matched = new Set<string>();
+    const q = search.trim().toLowerCase();
+    for (const [id, v] of views.entries()) {
+      const list = shiftsByWs.get(id) ?? [];
+      if (q && !(v.ws.code.toLowerCase().includes(q) || list.some((s) => s.operatorName.toLowerCase().includes(q)))) {
+        continue;
+      }
+      if (teamF && !list.some((s) => s.team === teamF || (v.ws.type === 'supervisor' && s.operatorName === teamF))) {
+        continue;
+      }
+      if (statusF === 'alert' && !v.alert) continue;
+      if (statusF !== 'all' && statusF !== 'alert' && v.category !== statusF) continue;
+      matched.add(id);
+    }
+    return matched;
+  }, [views, shiftsByWs, search, teamF, statusF]);
+
+  const flash = useCallback((m: string) => {
     clearTimeout(flashTimerRef.current);
     setMsg(m);
     flashTimerRef.current = setTimeout(() => setMsg(''), 6000);
-  };
+  }, []);
 
   // Confirmação de alerta individual
-  const ack = (id: string) =>
-    update((s) => {
-      const a = s.alerts.find((x) => x.id === id);
-      if (!a || a.acknowledgedAt) return s;
-      const curNow = nowRef.current;
-      const iso = curNow.toISOString();
-      const dStr = todayStr(curNow);
-      const nowM = minOfDay(curNow);
-      return {
-        ...s,
-        alerts: s.alerts.map((x): AlertLog => (x.id === id ? { ...x, acknowledgedAt: iso } : x)),
-        shifts: s.shifts.map((sh) =>
-          sh.id === a.shiftId ? applyAck(sh, a.eventType, shiftCycleDate(sh, dStr, nowM), iso) : sh,
-        ),
-      };
-    });
+  const ack = useCallback(
+    (id: string) =>
+      update((s) => {
+        const a = s.alerts.find((x) => x.id === id);
+        if (!a || a.acknowledgedAt) return s;
+        const curNow = nowRef.current;
+        const iso = curNow.toISOString();
+        const dStr = todayStr(curNow);
+        const nowM = minOfDay(curNow);
+        return {
+          ...s,
+          alerts: s.alerts.map((x): AlertLog => (x.id === id ? { ...x, acknowledgedAt: iso } : x)),
+          shifts: s.shifts.map((sh) =>
+            sh.id === a.shiftId ? applyAck(sh, a.eventType, shiftCycleDate(sh, dStr, nowM), iso) : sh,
+          ),
+        };
+      }),
+    [update],
+  );
 
-  // Confirmação de todos os alertas pendentes de uma só vez
-  const ackAllAlerts = () => {
+  // Confirmação de todos os alertas pendentes de uma só vez (O(A + S))
+  const ackAllAlerts = useCallback(() => {
     if (!pending.length) return;
     update((s) => {
       const curNow = nowRef.current;
       const iso = curNow.toISOString();
       const dStr = todayStr(curNow);
       const nowM = minOfDay(curNow);
-      let shifts = [...s.shifts];
-      const pendingList = s.alerts.filter((a) => !a.acknowledgedAt);
-
-      pendingList.forEach((a) => {
-        shifts = shifts.map((sh) =>
-          sh.id === a.shiftId ? applyAck(sh, a.eventType, shiftCycleDate(sh, dStr, nowM), iso) : sh,
-        );
-      });
-
+      const byShiftId = new Map(s.shifts.map((sh) => [sh.id, sh]));
+      for (const a of s.alerts) {
+        if (a.acknowledgedAt) continue;
+        const curShift = byShiftId.get(a.shiftId);
+        if (curShift) {
+          byShiftId.set(a.shiftId, applyAck(curShift, a.eventType, shiftCycleDate(curShift, dStr, nowM), iso));
+        }
+      }
       return {
         ...s,
-        shifts,
+        shifts: s.shifts.map((sh) => byShiftId.get(sh.id) ?? sh),
         alerts: s.alerts.map((a) => (a.acknowledgedAt ? a : { ...a, acknowledgedAt: iso })),
       };
     });
     flash(`Todos os ${pending.length} alerta(s) foram confirmados.`);
-  };
+  }, [pending.length, update, flash]);
 
   // Botão de ação rápida "OK" direto na PA (confirma presença ou normaliza ocorrência remota)
-  const quickLog = (shiftId: string) => {
-    let wasIncident = false;
-    update((s) => {
-      const curNow = nowRef.current;
-      const iso = curNow.toISOString();
-      const dStr = todayStr(curNow);
-      const nowM = minOfDay(curNow);
-      const hhmm = fmtClock(curNow).slice(0, 5);
-      const target = s.shifts.find((sh) => sh.id === shiftId);
-      wasIncident = !!target && isIncidentState(target.currentState);
-      const targetWs = target ? s.workstations.find((w) => w.id === target.wsId) : undefined;
-      const extraLogs: AlertLog[] =
-        wasIncident && target
-          ? [
-              {
-                id: `${dStr}|${target.id}|incident_resolved|${Date.now().toString(36)}`,
-                shiftId: target.id,
-                wsId: target.wsId,
-                wsCode: targetWs?.code ?? target.wsId,
-                operatorName: target.operatorName,
-                eventType: 'incident_resolved',
-                scheduledTime: hhmm,
-                acknowledgedAt: iso,
-                createdAt: iso,
-              },
-            ]
-          : [];
-      return {
-        ...s,
-        shifts: s.shifts.map((sh) =>
-          sh.id === shiftId
-            ? {
-                ...sh,
-                currentState: 'logged',
-                breakKind: '',
-                stateDate: shiftCycleDate(sh, dStr, nowM),
-                incidentTime: '',
-                updatedAt: iso,
-              }
-            : sh,
-        ),
-        alerts: [
-          ...s.alerts.map((al) =>
-            al.shiftId === shiftId && !al.acknowledgedAt ? { ...al, acknowledgedAt: iso } : al,
+  const quickLog = useCallback(
+    (shiftId: string) => {
+      let wasIncident = false;
+      update((s) => {
+        const curNow = nowRef.current;
+        const iso = curNow.toISOString();
+        const dStr = todayStr(curNow);
+        const nowM = minOfDay(curNow);
+        const hhmm = fmtClock(curNow).slice(0, 5);
+        const target = s.shifts.find((sh) => sh.id === shiftId);
+        wasIncident = !!target && isIncidentState(target.currentState);
+        const targetWs = target ? s.workstations.find((w) => w.id === target.wsId) : undefined;
+        const extraLogs: AlertLog[] =
+          wasIncident && target
+            ? [
+                {
+                  id: `${dStr}|${target.id}|incident_resolved|${Date.now().toString(36)}`,
+                  shiftId: target.id,
+                  wsId: target.wsId,
+                  wsCode: targetWs?.code ?? target.wsId,
+                  operatorName: target.operatorName,
+                  eventType: 'incident_resolved',
+                  scheduledTime: hhmm,
+                  acknowledgedAt: iso,
+                  createdAt: iso,
+                },
+              ]
+            : [];
+        return {
+          ...s,
+          shifts: s.shifts.map((sh) =>
+            sh.id === shiftId
+              ? {
+                  ...sh,
+                  currentState: 'logged',
+                  breakKind: '',
+                  stateDate: shiftCycleDate(sh, dStr, nowM),
+                  incidentTime: '',
+                  updatedAt: iso,
+                }
+              : sh,
           ),
-          ...extraLogs,
-        ],
-      };
-    });
-    flash(wasIncident ? 'Ocorrência normalizada · Operador Logado (Verde).' : 'Operador confirmado como Logado (Verde).');
-  };
+          alerts: [
+            ...s.alerts.map((al) =>
+              al.shiftId === shiftId && !al.acknowledgedAt ? { ...al, acknowledgedAt: iso } : al,
+            ),
+            ...extraLogs,
+          ],
+        };
+      });
+      flash(
+        wasIncident ? 'Ocorrência normalizada · Operador Logado (Verde).' : 'Operador confirmado como Logado (Verde).',
+      );
+    },
+    [update, flash],
+  );
 
   // Botão rápido "Deslogar" para confirmar encerramento do turno vencido
-  const quickLogout = (shiftId: string) => {
-    update((s) => {
-      const curNow = nowRef.current;
-      const iso = curNow.toISOString();
-      const dStr = todayStr(curNow);
-      const nowM = minOfDay(curNow);
-      return {
-        ...s,
-        shifts: s.shifts.map((sh) =>
-          sh.id === shiftId
-            ? {
-                ...sh,
-                currentState: 'done',
-                breakKind: '',
-                stateDate: shiftCycleDate(sh, dStr, nowM),
-                incidentTime: '',
-                updatedAt: iso,
-              }
-            : sh,
-        ),
-        alerts: s.alerts.map((al) =>
-          al.shiftId === shiftId && !al.acknowledgedAt ? { ...al, acknowledgedAt: iso } : al,
-        ),
-      };
-    });
-    flash('Operador deslogado (Pós-logout).');
-  };
+  const quickLogout = useCallback(
+    (shiftId: string) => {
+      update((s) => {
+        const curNow = nowRef.current;
+        const iso = curNow.toISOString();
+        const dStr = todayStr(curNow);
+        const nowM = minOfDay(curNow);
+        return {
+          ...s,
+          shifts: s.shifts.map((sh) =>
+            sh.id === shiftId
+              ? {
+                  ...sh,
+                  currentState: 'done',
+                  breakKind: '',
+                  stateDate: shiftCycleDate(sh, dStr, nowM),
+                  incidentTime: '',
+                  updatedAt: iso,
+                }
+              : sh,
+          ),
+          alerts: s.alerts.map((al) =>
+            al.shiftId === shiftId && !al.acknowledgedAt ? { ...al, acknowledgedAt: iso } : al,
+          ),
+        };
+      });
+      flash('Operador deslogado (Pós-logout).');
+    },
+    [update, flash],
+  );
 
   // Operadores que estão no horário de trabalho mas ainda não estão com status "logado"
   const scheduledToLog = useMemo(() => {
@@ -396,7 +442,7 @@ export default function App() {
   }, [snap, today, nowMin]);
 
   // Dar OK em lote para todos os operadores que estão no horário agora
-  const confirmAllScheduled = () => {
+  const confirmAllScheduled = useCallback(() => {
     if (!scheduledToLog.length) return;
     const count = scheduledToLog.length;
     update((s) => {
@@ -425,10 +471,10 @@ export default function App() {
       };
     });
     flash(`${count} operador(es) do horário confirmados como Logados (Verde).`);
-  };
+  }, [scheduledToLog, update, flash]);
 
   // Confirmar logout em lote para todos os operadores com horário de saída vencido
-  const confirmAllOverdueLogouts = () => {
+  const confirmAllOverdueLogouts = useCallback(() => {
     if (!overdueLogouts.length) return;
     const count = overdueLogouts.length;
     update((s) => {
@@ -457,26 +503,29 @@ export default function App() {
       };
     });
     flash(`${count} operador(es) com horário vencido foram deslogados.`);
-  };
+  }, [overdueLogouts, update, flash]);
 
   // Localizar inteligente: muda automaticamente para a aba certa (Presencial ou Home Office) e destaca o card
-  const locate = (wsId: string) => {
-    const targetWs = ref.current?.workstations.find((w) => w.id === wsId);
-    const targetIsHO = targetWs ? isHomeOfficeWs(targetWs) : wsId.startsWith('HO-');
-    if (targetIsHO && tab === 'presencial') setTab('ho');
-    else if (!targetIsHO && tab === 'ho') setTab('presencial');
+  const locate = useCallback(
+    (wsId: string) => {
+      const targetWs = ref.current?.workstations.find((w) => w.id === wsId);
+      const targetIsHO = targetWs ? isHomeOfficeWs(targetWs) : isHomeOfficeId(wsId);
+      if (targetIsHO && tab === 'presencial') setTab('ho');
+      else if (!targetIsHO && tab === 'ho') setTab('presencial');
 
-    clearTimeout(locateScrollTimerRef.current);
-    clearTimeout(locateClearTimerRef.current);
-    setHighlight(wsId);
-    locateScrollTimerRef.current = setTimeout(() => {
-      document.getElementById(`pa-${wsId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-    }, 80);
-    locateClearTimerRef.current = setTimeout(() => setHighlight(null), 3500);
-  };
+      clearTimeout(locateScrollTimerRef.current);
+      clearTimeout(locateClearTimerRef.current);
+      setHighlight(wsId);
+      locateScrollTimerRef.current = setTimeout(() => {
+        document.getElementById(`pa-${wsId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      }, 80);
+      locateClearTimerRef.current = setTimeout(() => setHighlight(null), 3500);
+    },
+    [ref, tab],
+  );
 
   // Adicionar nova posição dinâmica no Home Office
-  const addHomeOfficeSlot = () => {
+  const addHomeOfficeSlot = useCallback(() => {
     update((s) => {
       const maxNum = s.workstations
         .filter((w) => isHomeOfficeWs(w))
@@ -485,7 +534,7 @@ export default function App() {
       return { ...s, workstations: [...s.workstations, nextWs] };
     });
     flash('Nova posição Home Office adicionada.');
-  };
+  }, [update, flash]);
 
   const saveWs = (ws: Workstation, list: Shift[], removed: string[], moveTo: string): string | null => {
     if (!ws.code) return 'Informe o código da PA.';
@@ -608,46 +657,34 @@ export default function App() {
     }
   };
 
-  const matches = (id: string): boolean => {
-    const v = views.get(id);
-    if (!v) return true;
-    const list = (snap?.shifts ?? []).filter((s) => s.wsId === id);
-    const q = search.trim().toLowerCase();
-    if (q && !(v.ws.code.toLowerCase().includes(q) || list.some((s) => s.operatorName.toLowerCase().includes(q))))
-      return false;
-    if (teamF && !list.some((s) => s.team === teamF || (v.ws.type === 'supervisor' && s.operatorName === teamF)))
-      return false;
-    if (statusF === 'alert' && !v.alert) return false;
-    if (statusF === 'logged' && v.category !== 'logged') return false;
-    if (statusF === 'break' && v.category !== 'break') return false;
-    if (statusF === 'incident' && v.category !== 'incident') return false;
-    if (statusF === 'falta' && v.category !== 'falta') return false;
-    if (statusF === 'atestado' && v.category !== 'atestado') return false;
-    if (statusF === 'dsr' && v.category !== 'dsr') return false;
-    if (statusF === 'ferias' && v.category !== 'ferias') return false;
-    if (statusF === 'maint' && v.category !== 'maint') return false;
-    if (statusF === 'free' && v.category !== 'free') return false;
-    return true;
-  };
+  const openWs = useCallback((wsId: string) => setEditId(wsId), []);
+  const handleDropOn = useCallback((a: string, b: string) => update((s) => swapWs(s, a, b)), [update]);
+  const clearStatus = useCallback(() => setStatusF('all'), []);
+  const closeEdit = useCallback(() => setEditId(null), []);
+  const closeSettings = useCallback(() => setShowSettings(false), []);
 
-  const renderCard = (id: string) => {
-    const v = views.get(id);
-    if (!v) return null;
-    const span = id === 'SUP-01' || id === 'SUP-02' ? '!w-[304px]' : id === 'SUP-03' || id === 'SUP-04' ? '!h-[208px]' : '';
-    return (
-      <PACard
-        view={v}
-        spanClass={span}
-        dim={!matches(id)}
-        highlight={highlight === id}
-        onOpen={() => setEditId(id)}
-        onAck={ack}
-        onQuickLog={quickLog}
-        onQuickLogout={quickLogout}
-        onDropOn={(a, b) => update((s) => swapWs(s, a, b))}
-      />
-    );
-  };
+  const renderCard = useCallback(
+    (id: string) => {
+      const v = views.get(id);
+      if (!v) return null;
+      const span =
+        id === 'SUP-01' || id === 'SUP-02' ? '!w-[304px]' : id === 'SUP-03' || id === 'SUP-04' ? '!h-[208px]' : '';
+      return (
+        <PACard
+          view={v}
+          spanClass={span}
+          dim={!matchingIds.has(id)}
+          highlight={highlight === id}
+          onOpen={openWs}
+          onAck={ack}
+          onQuickLog={quickLog}
+          onQuickLogout={quickLogout}
+          onDropOn={handleDropOn}
+        />
+      );
+    },
+    [views, matchingIds, highlight, openWs, ack, quickLog, quickLogout, handleDropOn],
+  );
 
   if (authLoading) {
     return (
@@ -666,27 +703,7 @@ export default function App() {
 
   const editWs = snap.workstations.find((w) => w.id === editId);
   const online = storageMode === 'supabase';
-
-  const summaryCards: {
-    key: StatusFilter;
-    label: string;
-    stat: { total: number; pres: number; ho: number };
-    cls: string;
-    valCls: string;
-  }[] = [
-    { key: 'all', label: 'Todos', stat: summary.all, cls: 'bg-slate-100 border-slate-300 dark:bg-slate-800 dark:border-slate-700', valCls: 'text-slate-800 dark:text-slate-100' },
-    { key: 'logged', label: 'Logados', stat: summary.logged, cls: 'bg-[#C6EFCE]/60 border-emerald-400 dark:bg-emerald-950/60 dark:border-emerald-700', valCls: 'text-emerald-800 dark:text-emerald-300' },
-    { key: 'break', label: 'Em Pausa', stat: summary.break, cls: 'bg-[#FFEB9C]/60 border-amber-400 dark:bg-amber-950/60 dark:border-amber-700', valCls: 'text-amber-800 dark:text-amber-300' },
-    { key: 'alert', label: 'Em Alerta', stat: summary.alert, cls: summary.alert.total > 0 ? 'animate-pulse bg-red-100 border-red-500 dark:bg-red-950/80 dark:border-red-600' : 'bg-slate-100 border-slate-300 dark:bg-slate-800 dark:border-slate-700', valCls: summary.alert.total > 0 ? 'text-red-600 dark:text-red-300' : 'text-slate-500' },
-    { key: 'incident', label: 'Ocorrências HO', stat: summary.incident, cls: summary.incident.total > 0 ? 'bg-orange-100 border-orange-500 dark:bg-orange-950/70 dark:border-orange-600' : 'bg-orange-50/50 border-orange-200 dark:bg-slate-800 dark:border-slate-700', valCls: summary.incident.total > 0 ? 'text-orange-700 dark:text-orange-300' : 'text-slate-500' },
-    { key: 'atestado', label: 'Atestado', stat: summary.atestado, cls: 'bg-[#B7DEE8]/60 border-cyan-400 dark:bg-cyan-950/50 dark:border-cyan-700', valCls: 'text-cyan-800 dark:text-cyan-300' },
-    { key: 'dsr', label: 'DSR', stat: summary.dsr, cls: 'bg-[#E4DFEC]/70 border-purple-400 dark:bg-purple-950/50 dark:border-purple-700', valCls: 'text-purple-800 dark:text-purple-300' },
-    { key: 'falta', label: 'Faltas', stat: summary.falta, cls: 'bg-[#FFC7CE]/60 border-rose-400 dark:bg-rose-950/50 dark:border-rose-700', valCls: 'text-rose-700 dark:text-rose-300' },
-    { key: 'ferias', label: 'Férias', stat: summary.ferias, cls: 'bg-[#E0E7FF]/70 border-indigo-400 dark:bg-indigo-950/50 dark:border-indigo-700', valCls: 'text-indigo-700 dark:text-indigo-300' },
-    { key: 'maint', label: 'Manutenção', stat: summary.maint, cls: 'bg-slate-200/80 border-slate-400 dark:bg-slate-800 dark:border-slate-600', valCls: 'text-slate-700 dark:text-slate-300' },
-    { key: 'free', label: 'Livres', stat: summary.free, cls: 'bg-[#F2F2F2] border-slate-300 dark:bg-slate-800 dark:border-slate-700', valCls: 'text-slate-600 dark:text-slate-300' },
-  ];
-
+  const presencialCount = snap.workstations.length - hoWorkstations.length;
   const blinkHO = tab === 'presencial' && pendingHO > 0;
   const blinkPresencial = tab === 'ho' && pendingPresencial > 0;
 
@@ -697,7 +714,7 @@ export default function App() {
         <div>
           <h1 className="text-base font-bold leading-tight">Monitor de PAs — Operação Híbrida</h1>
           <p className="text-[11px] text-sky-200">
-            62 PAs presenciais · {hoWorkstations.length} posições Home Office
+            {presencialCount} PAs presenciais · {hoWorkstations.length} posições Home Office
           </p>
         </div>
 
@@ -754,18 +771,15 @@ export default function App() {
           </button>
         </nav>
 
-        <div className={`flex items-center gap-2 rounded-lg px-3 py-1 ${clock.simOn ? 'bg-fuchsia-600' : 'bg-black/30'}`}>
-          <Clock size={18} />
-          <span className="font-mono text-2xl font-bold tabular-nums">{fmtClock(now)}</span>
-          {clock.simOn && <span className="text-[10px] font-bold uppercase">simulação</span>}
-        </div>
+        <HeaderClock getNow={getNow} simOn={clock.simOn} minuteKey={clock.minuteKey} />
 
         <div className="flex flex-wrap items-center gap-1 rounded-lg bg-black/20 px-2 py-1">
           <button
             className="btn"
             onClick={() => {
-              setSimH(now.getHours());
-              setSimM(now.getMinutes());
+              const cur = getNow();
+              setSimH(cur.getHours());
+              setSimM(cur.getMinutes());
               clock.toggleSim();
             }}
           >
@@ -840,10 +854,10 @@ export default function App() {
           <button className="btn" onClick={() => setSoundOn((v) => !v)} title="Som dos alertas">
             {soundOn ? <Volume2 size={14} /> : <VolumeX size={14} />} {soundOn ? 'Som ON' : 'Mudo'}
           </button>
-          <button className="btn" onClick={() => setDark((v) => !v)}>
+          <button className="btn" onClick={() => setDark((v) => !v)} aria-label="Alternar tema">
             {dark ? <Sun size={14} /> : <Moon size={14} />}
           </button>
-          <button className="btn" onClick={() => setShowSettings(true)}>
+          <button className="btn" onClick={() => setShowSettings(true)} aria-label="Abrir configurações">
             <Settings size={14} />
           </button>
 
@@ -875,132 +889,31 @@ export default function App() {
         </div>
       )}
 
-      {/* PAINEL DE RESUMO RÁPIDO CLICÁVEL (PRESENCIAL + HOME OFFICE) */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-white px-4 py-2 dark:border-slate-700 dark:bg-slate-900">
-        {summaryCards.map((c) => {
-          const active = statusF === c.key;
-          return (
-            <button
-              key={c.key}
-              type="button"
-              onClick={() => setStatusF(active ? 'all' : c.key)}
-              title={`Filtrar por ${c.label}`}
-              className={`flex flex-col items-start rounded-lg border px-2.5 py-1 text-left transition hover:shadow-sm active:scale-[0.98] ${c.cls} ${
-                active ? 'ring-2 ring-navy ring-offset-1 dark:ring-sky-400' : ''
-              }`}
-            >
-              <div className="flex w-full items-baseline justify-between gap-2">
-                <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">{c.label}</span>
-                <span className={`text-base font-black tabular-nums leading-none ${c.valCls}`}>{c.stat.total}</span>
-              </div>
-              <span className="mt-0.5 text-[9.5px] font-medium text-slate-500 dark:text-slate-400">
-                Pres: {c.stat.pres} · HO: {c.stat.ho}
-              </span>
-            </button>
-          );
-        })}
+      <SummaryBar
+        summary={summary}
+        statusF={statusF}
+        onSelectStatus={setStatusF}
+        onClearStatus={clearStatus}
+        scheduledCount={scheduledToLog.length}
+        overdueCount={overdueLogouts.length}
+        onConfirmScheduled={confirmAllScheduled}
+        onConfirmOverdue={confirmAllOverdueLogouts}
+        online={online}
+        realtimeStatus={realtimeStatus}
+      />
 
-        {statusF !== 'all' && (
-          <button
-            type="button"
-            onClick={() => setStatusF('all')}
-            className="flex items-center gap-1 rounded-md bg-navy px-2.5 py-1.5 text-xs font-bold text-white shadow hover:bg-navy/90 active:scale-95"
-          >
-            <X size={13} /> Mostrar Todos
-          </button>
-        )}
-
-        {scheduledToLog.length > 0 && (
-          <button
-            onClick={confirmAllScheduled}
-            className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-700 active:scale-95 transition"
-          >
-            <Check size={14} strokeWidth={3} /> Dar OK nos {scheduledToLog.length} do Horário
-          </button>
-        )}
-
-        {overdueLogouts.length > 0 && (
-          <button
-            onClick={confirmAllOverdueLogouts}
-            className="flex items-center gap-1.5 rounded-md bg-rose-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-rose-700 active:scale-95 transition"
-          >
-            <Check size={14} strokeWidth={3} /> Confirmar Logout dos {overdueLogouts.length} Vencidos
-          </button>
-        )}
-
-        <span
-          className={`ml-auto flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${
-            !online
-              ? 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
-              : realtimeStatus === 'connected'
-                ? 'bg-emerald-100 text-emerald-800'
-                : realtimeStatus === 'error'
-                  ? 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200'
-                  : 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200'
-          }`}
-        >
-          {!online || realtimeStatus === 'error' ? <WifiOff size={14} /> : <Wifi size={14} />}{' '}
-          {!online
-            ? 'Modo Local (Testes)'
-            : realtimeStatus === 'connected'
-              ? 'Supabase Online'
-              : realtimeStatus === 'error'
-                ? 'Realtime Offline'
-                : 'Conectando…'}
-        </span>
-      </div>
-
-      {/* FILTROS */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-slate-50 px-4 py-2 dark:border-slate-700 dark:bg-slate-900/60">
-        <div className="relative">
-          <Search size={14} className="absolute left-2 top-2.5 text-slate-400" />
-          <input
-            className="input !w-64 !pl-7"
-            placeholder="Buscar nome ou código da PA"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        <select
-          className="input !w-48 font-medium"
-          value={statusF}
-          onChange={(e) => setStatusF(e.target.value as StatusFilter)}
-        >
-          <option value="all">Status: Todos</option>
-          <option value="alert">Em Alerta ({summary.alert.total})</option>
-          <option value="logged">Logados ({summary.logged.total})</option>
-          <option value="break">Em Pausa ({summary.break.total})</option>
-          <option value="incident">🟠 Ocorrências HO ({summary.incident.total})</option>
-          <option value="falta">🚫 Faltas ({summary.falta.total})</option>
-          <option value="atestado">📋 Atestados ({summary.atestado.total})</option>
-          <option value="dsr">🏖️ DSR ({summary.dsr.total})</option>
-          <option value="ferias">✈️ Férias ({summary.ferias.total})</option>
-          <option value="maint">🔧 Manutenção ({summary.maint.total})</option>
-          <option value="free">Livres ({summary.free.total})</option>
-        </select>
-        <select className="input !w-44" value={teamF} onChange={(e) => setTeamF(e.target.value)}>
-          <option value="">Equipe: Todas</option>
-          {teams.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-        <div className="ml-1 flex flex-wrap items-center gap-2.5 text-[11px]">
-          <Legend c="bg-[#C6EFCE] border-slate-500" t="Logado" />
-          <Legend c="bg-[#FFEB9C] border-amber-500" t="Pausa" />
-          <Legend c="bg-[#FED7AA] border-orange-500" t="Ocorrência HO" />
-          <Legend c="bg-[#FFC7CE] border-rose-500" t="Falta" />
-          <Legend c="bg-[#B7DEE8] border-cyan-500" t="Atestado" />
-          <Legend c="bg-[#E4DFEC] border-purple-500" t="DSR" />
-          <Legend c="bg-[#E0E7FF] border-indigo-400" t="Férias" />
-          <Legend c="bg-[#F2F2F2] border-slate-400" t="Livre" />
-          <Legend c="bg-[#FFE699] border-amber-400" t="Supervisor" />
-          <Legend c="bg-red-500 border-red-700" t="Alerta" />
-        </div>
-        {msg && <span className="ml-auto text-xs font-semibold text-emerald-700 dark:text-emerald-300">{msg}</span>}
-        {error && <span className="ml-auto text-xs font-semibold text-red-600">⚠ {error}</span>}
-      </div>
+      <FilterBar
+        search={search}
+        onSearchChange={setSearch}
+        statusF={statusF}
+        onStatusChange={setStatusF}
+        teamF={teamF}
+        onTeamChange={setTeamF}
+        teams={teams}
+        summary={summary}
+        msg={msg}
+        error={error}
+      />
 
       {/* MAPA + GRADE HOME OFFICE + PAINEL */}
       <div className="flex min-h-0 flex-1">
@@ -1024,18 +937,18 @@ export default function App() {
         <EditModal
           key={editWs.id}
           ws={editWs}
-          shifts={snap.shifts.filter((s) => s.wsId === editWs.id)}
+          shifts={shiftsByWs.get(editWs.id) ?? []}
           allWs={snap.workstations}
           occupiedWsIds={occupiedWsIds}
           today={today}
           getNow={getNow}
-          onClose={() => setEditId(null)}
+          onClose={closeEdit}
           onSave={saveWs}
         />
       )}
       {showSettings && (
         <SettingsModal
-          onClose={() => setShowSettings(false)}
+          onClose={closeSettings}
           syncing={syncing}
           message={msg}
           onSync={async () => {
@@ -1084,14 +997,5 @@ export default function App() {
         />
       )}
     </div>
-  );
-}
-
-function Legend({ c, t }: { c: string; t: string }) {
-  return (
-    <span className="flex items-center gap-1">
-      <span className={`inline-block h-2.5 w-2.5 rounded-sm border ${c}`} />
-      {t}
-    </span>
   );
 }

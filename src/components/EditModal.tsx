@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowRightLeft, Building2, Check, Home, Plus, Trash2, X, Zap } from 'lucide-react';
 import type { Shift, WsStatus, WsType, Workstation } from '../types';
 import { isIncidentState, shiftCycleDate } from '../lib/engine';
@@ -37,23 +37,23 @@ const QUICK_STATES: {
   label: string;
   cls: string;
 }[] = [
-  { state: 'logged', label: '🟢 Logado (OK)', cls: 'bg-emerald-600 text-white hover:bg-emerald-700' },
-  { state: 'break', label: '🟡 Em Pausa', cls: 'bg-amber-500 text-amber-950 hover:bg-amber-600' },
-  { state: 'falta', label: '🚫 Falta', cls: 'bg-rose-600 text-white hover:bg-rose-700' },
-  { state: 'atestado', label: '📋 Atestado', cls: 'bg-cyan-700 text-white hover:bg-cyan-800' },
-  { state: 'dsr', label: '🏖️ DSR', cls: 'bg-purple-700 text-white hover:bg-purple-800' },
-  { state: 'ferias', label: '✈️ Férias', cls: 'bg-indigo-600 text-white hover:bg-indigo-700' },
-  { state: 'pending', label: '⚪ Pendente', cls: 'bg-slate-600 text-white hover:bg-slate-700' },
-];
+    { state: 'logged', label: '🟢 Logado (OK)', cls: 'bg-emerald-600 text-white hover:bg-emerald-700' },
+    { state: 'break', label: '🟡 Em Pausa', cls: 'bg-amber-500 text-amber-950 hover:bg-amber-600' },
+    { state: 'falta', label: '🚫 Falta', cls: 'bg-rose-600 text-white hover:bg-rose-700' },
+    { state: 'atestado', label: '📋 Atestado', cls: 'bg-cyan-700 text-white hover:bg-cyan-800' },
+    { state: 'dsr', label: '🏖️ DSR', cls: 'bg-purple-700 text-white hover:bg-purple-800' },
+    { state: 'ferias', label: '✈️ Férias', cls: 'bg-indigo-600 text-white hover:bg-indigo-700' },
+    { state: 'pending', label: '⚪ Pendente', cls: 'bg-slate-600 text-white hover:bg-slate-700' },
+  ];
 
 const INCIDENT_STATES: {
   state: Shift['currentState'];
   label: string;
 }[] = [
-  { state: 'no_internet', label: '🌐 Sem Internet' },
-  { state: 'no_power', label: '⚡ Sem Energia' },
-  { state: 'tech_issue', label: '💻 Problema Técnico (TI)' },
-];
+    { state: 'no_internet', label: '🌐 Sem Internet' },
+    { state: 'no_power', label: '⚡ Sem Energia' },
+    { state: 'tech_issue', label: '💻 Problema Técnico (TI)' },
+  ];
 
 export default function EditModal({ ws, shifts, allWs, occupiedWsIds, today, getNow, onClose, onSave }: Props) {
   const [code, setCode] = useState(ws.code);
@@ -74,6 +74,14 @@ export default function EditModal({ ws, shifts, allWs, occupiedWsIds, today, get
   const otherWs = allWs.filter((w) => w.id !== ws.id && w.status !== 'maintenance' && !freeIds.has(w.id));
 
   const [quickPresencialId, setQuickPresencialId] = useState(freePresencial[0]?.id ?? '');
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   const patch = (id: string, p: Partial<Shift>) => setList((l) => l.map((s) => (s.id === id ? { ...s, ...p } : s)));
   const labels = ['Manhã', 'Tarde', 'Noite'];
@@ -118,18 +126,22 @@ export default function EditModal({ ws, shifts, allWs, occupiedWsIds, today, get
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-modal-title"
         className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-5 shadow-2xl dark:bg-slate-900"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-bold text-navy dark:text-sky-300">Editar {ws.code}</h2>
+            <h2 id="edit-modal-title" className="text-lg font-bold text-navy dark:text-sky-300">
+              Editar {ws.code}
+            </h2>
             <span
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                isHO
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold ${isHO
                   ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200'
                   : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
-              }`}
+                }`}
             >
               {isHO ? <Home size={12} /> : <Building2 size={12} />} {isHO ? 'Home Office' : 'Presencial'}
             </span>
@@ -278,9 +290,8 @@ export default function EditModal({ ws, shifts, allWs, occupiedWsIds, today, get
                         key={q.state}
                         type="button"
                         onClick={() => quickApplyAndSave(s.id, q.state)}
-                        className={`flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold shadow-sm transition active:scale-95 ${q.cls} ${
-                          active ? 'ring-2 ring-slate-900 ring-offset-1 dark:ring-white' : ''
-                        }`}
+                        className={`flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold shadow-sm transition active:scale-95 ${q.cls} ${active ? 'ring-2 ring-slate-900 ring-offset-1 dark:ring-white' : ''
+                          }`}
                       >
                         {q.state === 'logged' && <Check size={13} strokeWidth={3} />}
                         {q.label}
@@ -303,9 +314,8 @@ export default function EditModal({ ws, shifts, allWs, occupiedWsIds, today, get
                           key={inc.state}
                           type="button"
                           onClick={() => quickApplyAndSave(s.id, inc.state)}
-                          className={`flex items-center gap-1 rounded-md bg-orange-500 px-2.5 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-orange-600 active:scale-95 ${
-                            active ? 'ring-2 ring-slate-900 ring-offset-1 dark:ring-white' : ''
-                          }`}
+                          className={`flex items-center gap-1 rounded-md bg-orange-500 px-2.5 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-orange-600 active:scale-95 ${active ? 'ring-2 ring-slate-900 ring-offset-1 dark:ring-white' : ''
+                            }`}
                         >
                           {inc.label}
                         </button>
@@ -353,57 +363,57 @@ export default function EditModal({ ws, shifts, allWs, occupiedWsIds, today, get
                       });
                     }}
                   >
-                  <option value="logged">🟢 Logado (Verde)</option>
-                  <option value="break">🟡 Em Pausa (Amarelo)</option>
-                  <option value="falta">🚫 Falta (Ausente)</option>
-                  <option value="atestado">📋 Atestado Médico</option>
-                  <option value="dsr">🏖️ DSR (Descanso Semanal)</option>
-                  <option value="ferias">✈️ Férias</option>
-                  <option value="no_internet">🌐 Sem Internet (Ocorrência)</option>
-                  <option value="no_power">⚡ Sem Energia (Ocorrência)</option>
-                  <option value="tech_issue">💻 Problema Técnico TI (Ocorrência)</option>
-                  <option value="pending">⚪ Aguardando Login (Pendente)</option>
-                  <option value="done">⚫ Pós-Logout (Finalizado)</option>
-                </select>
-              </div>
-
-              {isIncidentState(s.currentState) && (
-                <div>
-                  <span className="label">Hora da ocorrência</span>
-                  <input
-                    type="time"
-                    className="input"
-                    value={s.incidentTime}
-                    onChange={(e) => patch(s.id, { incidentTime: e.target.value })}
-                  />
+                    <option value="logged">🟢 Logado (Verde)</option>
+                    <option value="break">🟡 Em Pausa (Amarelo)</option>
+                    <option value="falta">🚫 Falta (Ausente)</option>
+                    <option value="atestado">📋 Atestado Médico</option>
+                    <option value="dsr">🏖️ DSR (Descanso Semanal)</option>
+                    <option value="ferias">✈️ Férias</option>
+                    <option value="no_internet">🌐 Sem Internet (Ocorrência)</option>
+                    <option value="no_power">⚡ Sem Energia (Ocorrência)</option>
+                    <option value="tech_issue">💻 Problema Técnico TI (Ocorrência)</option>
+                    <option value="pending">⚪ Aguardando Login (Pendente)</option>
+                    <option value="done">⚫ Pós-Logout (Finalizado)</option>
+                  </select>
                 </div>
-              )}
 
-              {TIME_FIELDS.map((f) => (
-                <div key={f.key}>
-                  <span className="label">{f.label}</span>
-                  <input
-                    type="time"
-                    className="input"
-                    value={s[f.key] as string}
-                    onChange={(e) => patch(s.id, { [f.key]: e.target.value } as Partial<Shift>)}
-                  />
-                  {f.key === 'break101Time' && s.break101Time && (
-                    <span className="text-[10px] text-slate-500">retorno {addMin(s.break101Time, 10)}</span>
-                  )}
-                  {f.key === 'break60Time' && s.break60Time && (
-                    <span className="text-[10px] text-slate-500">retorno {addMin(s.break60Time, 60)}</span>
-                  )}
-                  {f.key === 'break102Time' && s.break102Time && (
-                    <span className="text-[10px] text-slate-500">retorno {addMin(s.break102Time, 10)}</span>
-                  )}
+                {isIncidentState(s.currentState) && (
+                  <div>
+                    <span className="label">Hora da ocorrência</span>
+                    <input
+                      type="time"
+                      className="input"
+                      value={s.incidentTime}
+                      onChange={(e) => patch(s.id, { incidentTime: e.target.value })}
+                    />
+                  </div>
+                )}
+
+                {TIME_FIELDS.map((f) => (
+                  <div key={f.key}>
+                    <span className="label">{f.label}</span>
+                    <input
+                      type="time"
+                      className="input"
+                      value={s[f.key] as string}
+                      onChange={(e) => patch(s.id, { [f.key]: e.target.value } as Partial<Shift>)}
+                    />
+                    {f.key === 'break101Time' && s.break101Time && (
+                      <span className="text-[10px] text-slate-500">retorno {addMin(s.break101Time, 10)}</span>
+                    )}
+                    {f.key === 'break60Time' && s.break60Time && (
+                      <span className="text-[10px] text-slate-500">retorno {addMin(s.break60Time, 60)}</span>
+                    )}
+                    {f.key === 'break102Time' && s.break102Time && (
+                      <span className="text-[10px] text-slate-500">retorno {addMin(s.break102Time, 10)}</span>
+                    )}
+                  </div>
+                ))}
+                <div className="col-span-2 sm:col-span-4">
+                  <span className="label">Observações</span>
+                  <input className="input" value={s.notes} onChange={(e) => patch(s.id, { notes: e.target.value })} />
                 </div>
-              ))}
-              <div className="col-span-2 sm:col-span-4">
-                <span className="label">Observações</span>
-                <input className="input" value={s.notes} onChange={(e) => patch(s.id, { notes: e.target.value })} />
               </div>
-            </div>
               <div className="mt-2 text-right">
                 <button
                   className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700"

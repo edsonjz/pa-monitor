@@ -5,8 +5,11 @@ export const paId = (n: number) => `PA-${p2(n)}`;
 export const hoId = (n: number) => `HO-${p2(n)}`;
 const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => paId(a + i));
 
+export const isHomeOfficeId = (wsId: string, wsCode = ''): boolean =>
+  wsId.startsWith('HO-') || wsCode.toUpperCase().startsWith('HO-');
+
 export const isHomeOfficeWs = (ws: Pick<Workstation, 'id' | 'blockName'>): boolean =>
-  ws.blockName === 'Home Office' || ws.id.startsWith('HO-');
+  ws.blockName === 'Home Office' || isHomeOfficeId(ws.id);
 
 export const hoNumber = (id: string): number => {
   const m = /^HO-0*(\d+)$/i.exec(id);

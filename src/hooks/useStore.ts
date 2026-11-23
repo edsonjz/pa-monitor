@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Snapshot } from '../types';
+import { applyRealtimeChange, type RealtimeChange } from '../services/realtimeReducer';
 import { loadSnapshot, persist, type RealtimeStatus, subscribeRealtime } from '../services/storageService';
 import { defaultWorkstations } from '../lib/layout';
 
@@ -13,12 +14,13 @@ export function useStore(enabled = true, simulationMode = false) {
   const prevSimRef = useRef(simulationMode);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const inFlightRef = useRef(0);
-  const pendingReloadRef = useRef(false);
+  const pendingChangesRef = useRef<RealtimeChange[]>([]);
 
   const load = useCallback(async () => {
     if (!enabled) return;
     try {
       const s = await loadSnapshot();
+      pendingChangesRef.current = [];
       ref.current = s;
       setSnap(s);
       setError(null);
@@ -33,20 +35,32 @@ export function useStore(enabled = true, simulationMode = false) {
 
   useEffect(() => {
     if (!enabled) {
+      pendingChangesRef.current = [];
       ref.current = null;
       setSnap(null);
       setRealtimeStatus('idle');
       return;
     }
     void load();
-    return subscribeRealtime(() => {
-      if (simRef.current) return;
-      if (inFlightRef.current > 0) {
-        pendingReloadRef.current = true;
-        return;
-      }
-      void load();
-    }, setRealtimeStatus);
+    return subscribeRealtime(
+      (change) => {
+        if (simRef.current) return;
+        if (inFlightRef.current > 0) {
+          pendingChangesRef.current.push(change);
+          return;
+        }
+        const cur = ref.current;
+        if (!cur) return;
+        const next = applyRealtimeChange(cur, change);
+        if (next === cur) return;
+        ref.current = next;
+        setSnap(next);
+      },
+      setRealtimeStatus,
+      () => {
+        if (!simRef.current) void load();
+      },
+    );
   }, [enabled, load]);
 
   useEffect(() => {
@@ -76,9 +90,19 @@ export function useStore(enabled = true, simulationMode = false) {
           await load();
         } finally {
           inFlightRef.current = Math.max(0, inFlightRef.current - 1);
-          if (inFlightRef.current === 0 && pendingReloadRef.current && !simRef.current) {
-            pendingReloadRef.current = false;
-            void load();
+          if (inFlightRef.current === 0 && !simRef.current && pendingChangesRef.current.length > 0) {
+            const queued = pendingChangesRef.current.splice(0);
+            const cur = ref.current;
+            if (cur) {
+              let merged = cur;
+              for (const change of queued) {
+                merged = applyRealtimeChange(merged, change);
+              }
+              if (merged !== cur) {
+                ref.current = merged;
+                setSnap(merged);
+              }
+            }
           }
         }
       });

@@ -55,7 +55,7 @@ const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 const MAX_IMPORT_ROWS = 2000;
 const ALLOWED_EXT = /\.(xlsx|xls|csv)$/i;
 
-function sanitizeCell(value: string | number): string | number {
+export function sanitizeCell(value: string | number): string | number {
   if (typeof value === 'string' && /^[\s]*[=+\-@\t\r]/.test(value)) {
     return `'${value}`;
   }

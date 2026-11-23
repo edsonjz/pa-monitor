@@ -1,6 +1,17 @@
-import type { AlertLog, Shift, Snapshot, Workstation } from '../types';
+import type { Snapshot } from '../types';
 import { defaultWorkstations, ensureHomeOfficeWorkstations } from '../lib/layout';
 import { sampleShifts } from '../lib/seed';
+import {
+  alertFromRow,
+  alertToRow,
+  type RealtimeChange,
+  type RealtimeTable,
+  type Row,
+  shiftFromRow,
+  shiftToRow,
+  wsFromRow,
+  wsToRow,
+} from './realtimeReducer';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 
 const KEY = 'pa-monitor-v1';
@@ -34,45 +45,6 @@ function initLocal(): Snapshot {
   writeLocal(snap);
   return snap;
 }
-
-/* ---------------- mapeadores Supabase ---------------- */
-type Row = Record<string, unknown>;
-const s = (v: unknown) => (v == null ? '' : String(v));
-
-const wsToRow = (w: Workstation): Row => ({
-  id: w.id, code: w.code, label: w.label, type: w.type, block_name: w.blockName,
-  grid_position: w.gridPosition, status: w.status, updated_at: w.updatedAt,
-});
-const wsFromRow = (r: Row): Workstation => ({
-  id: s(r.id), code: s(r.code), label: s(r.label), type: s(r.type) as Workstation['type'],
-  blockName: s(r.block_name), gridPosition: s(r.grid_position), status: s(r.status) as Workstation['status'],
-  updatedAt: s(r.updated_at),
-});
-const shiftToRow = (x: Shift): Row => ({
-  id: x.id, workstation_id: x.wsId, operator_name: x.operatorName, team: x.team, shift_label: x.shiftLabel,
-  login_time: x.loginTime, break10_1_time: x.break101Time, break60_time: x.break60Time,
-  break10_2_time: x.break102Time, logout_time: x.logoutTime, notes: x.notes,
-  current_state: x.currentState, break_kind: x.breakKind, state_date: x.stateDate,
-  incident_time: x.incidentTime || '', updated_at: x.updatedAt,
-});
-const shiftFromRow = (r: Row): Shift => ({
-  id: s(r.id), wsId: s(r.workstation_id), operatorName: s(r.operator_name), team: s(r.team),
-  shiftLabel: s(r.shift_label), loginTime: s(r.login_time), break101Time: s(r.break10_1_time),
-  break60Time: s(r.break60_time), break102Time: s(r.break10_2_time), logoutTime: s(r.logout_time),
-  notes: s(r.notes), currentState: (s(r.current_state) || 'pending') as Shift['currentState'],
-  breakKind: s(r.break_kind) as Shift['breakKind'], stateDate: s(r.state_date),
-  incidentTime: s(r.incident_time), updatedAt: s(r.updated_at),
-});
-const alertToRow = (a: AlertLog): Row => ({
-  id: a.id, shift_id: a.shiftId, workstation_id: a.wsId, ws_code: a.wsCode, operator_name: a.operatorName,
-  event_type: a.eventType, scheduled_time: a.scheduledTime, acknowledged_at: a.acknowledgedAt, created_at: a.createdAt,
-});
-const alertFromRow = (r: Row): AlertLog => ({
-  id: s(r.id), shiftId: s(r.shift_id), wsId: s(r.workstation_id), wsCode: s(r.ws_code),
-  operatorName: s(r.operator_name), eventType: s(r.event_type) as AlertLog['eventType'],
-  scheduledTime: s(r.scheduled_time), acknowledgedAt: (r.acknowledged_at as string | null) ?? null,
-  createdAt: s(r.created_at),
-});
 
 async function must<T>(p: PromiseLike<{ data: T; error: { message: string } | null }>): Promise<T> {
   const { data, error } = await p;
@@ -152,8 +124,9 @@ export async function persist(prev: Snapshot, next: Snapshot): Promise<void> {
 }
 
 export function subscribeRealtime(
-  onChange: () => void,
+  onChange: (change: RealtimeChange) => void,
   onStatus?: (status: RealtimeStatus) => void,
+  onReconnect?: () => void,
 ): () => void {
   if (storageMode !== 'supabase') {
     onStatus?.('idle');
@@ -161,23 +134,33 @@ export function subscribeRealtime(
   }
   const db = supabase!;
   onStatus?.('connecting');
-  let t: ReturnType<typeof setTimeout> | undefined;
-  const cb = () => {
-    clearTimeout(t);
-    t = setTimeout(onChange, 150);
-  };
+  let disconnected = false;
   const ch = db.channel('pa-monitor-realtime');
-  ['workstations', 'operator_shifts', 'alert_logs'].forEach((table) =>
-    ch.on('postgres_changes', { event: '*', schema: 'public', table }, cb),
+  (['workstations', 'operator_shifts', 'alert_logs'] as RealtimeTable[]).forEach((table) =>
+    ch.on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => {
+      const newRow = payload.new && Object.keys(payload.new).length ? (payload.new as Row) : null;
+      const oldRow = payload.old && Object.keys(payload.old).length ? (payload.old as Row) : null;
+      onChange({
+        table,
+        eventType: payload.eventType as RealtimeChange['eventType'],
+        newRow,
+        oldRow,
+      });
+    }),
   );
   ch.subscribe((status) => {
-    if (status === 'SUBSCRIBED') onStatus?.('connected');
-    else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+    if (status === 'SUBSCRIBED') {
+      onStatus?.('connected');
+      if (disconnected) {
+        disconnected = false;
+        onReconnect?.();
+      }
+    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+      disconnected = true;
       onStatus?.('error');
     }
   });
   return () => {
-    clearTimeout(t);
     onStatus?.('idle');
     void db.removeChannel(ch);
   };
